@@ -6,7 +6,7 @@ tracker:
   terminal_labels: ["done", "wontfix"]
 
 agent:
-  command: "claude -p {{prompt_file}} --output-format stream-json --verbose"
+  command: "claude -p {{prompt_file}} --output-format stream-json --verbose --model sonnet --dangerously-skip-permissions"
   prompt_delivery: file
   timeout_ms: 3600000
   max_concurrent: 5
@@ -70,9 +70,10 @@ You are an autonomous coding agent working on issue **{{issue.identifier}}**.
 
 1. Create a feature branch named `{{issue.identifier | downcase}}`
 2. Implement the required changes
-3. Write or update tests as needed
-4. Ensure all tests pass
-5. Commit, push the branch, and open a pull request with a clear description
+3. Inspect the project stack and choose appropriate testing tools (unit tests, linting, type checking, etc.). If no testing infrastructure exists yet, set it up.
+4. Write tests for the changes you made
+5. Run all tests and fix any failures — do not move on until everything passes
+6. Commit, push the branch, and open a pull request with a clear description
 
 {% if attempt %}
 This is retry attempt #{{attempt}}. Check the previous work in this workspace and continue from where it left off.

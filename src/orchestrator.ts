@@ -207,6 +207,9 @@ export class Orchestrator {
         if (this.shuttingDown) break;
         if (!this.shouldDispatch(issue, config)) continue;
 
+        // Claim before async dispatch to enforce concurrency
+        this.claimed.add(issue.id);
+
         // Cache issue in DB
         this.store.upsertIssue(issue);
 
@@ -253,8 +256,8 @@ export class Orchestrator {
     if (this.running.has(issue.id)) return false;
     if (this.claimed.has(issue.id)) return false;
 
-    // Global concurrency
-    if (this.running.size >= config.agent.maxConcurrent) return false;
+    // Global concurrency (use claimed.size because dispatch is non-blocking)
+    if (this.claimed.size >= config.agent.maxConcurrent) return false;
 
     // Per-state concurrency
     if (config.agent.maxConcurrentByState) {
@@ -280,9 +283,6 @@ export class Orchestrator {
 
   private async dispatch(issue: Issue, attempt: number): Promise<void> {
     const log = this.logger.child({ issue_id: issue.id, identifier: issue.identifier });
-
-    // Claim
-    this.claimed.add(issue.id);
 
     try {
       // Ensure workspace
@@ -334,7 +334,25 @@ export class Orchestrator {
         issueIdentifier: issue.identifier,
         attempt,
         signal: abortController.signal,
-        onOutput: (line) => log.debug(line),
+        onOutput: (line) => {
+          try {
+            const evt = JSON.parse(line);
+            if (evt.type === 'assistant' && evt.message?.content) {
+              for (const block of evt.message.content) {
+                if (block.type === 'tool_use') {
+                  log.info(`Tool: ${block.name}`, { input: block.input?.command || block.input?.description || '' });
+                } else if (block.type === 'text' && block.text) {
+                  log.info(`Agent: ${block.text.slice(0, 200)}`);
+                }
+              }
+            } else if (evt.type === 'user' && evt.tool_use_result?.stderr) {
+              log.warn(`Stderr: ${evt.tool_use_result.stderr.slice(0, 200)}`);
+            }
+          } catch {
+            // Not JSON or non-stream output — log as-is if short
+            if (line.length < 300) log.debug(line);
+          }
+        },
       });
 
       // Agent completed
@@ -385,7 +403,7 @@ export class Orchestrator {
       }
 
       if (!this.shouldDispatch(issue, config)) {
-        if (this.running.size >= config.agent.maxConcurrent) {
+        if (this.claimed.size >= config.agent.maxConcurrent) {
           // No slots — requeue
           this.retryEngine.scheduleFailureRetry(
             issueId,

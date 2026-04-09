@@ -216,6 +216,12 @@ export class ConfigManager {
         this.logger.error('Invalid config after reload, keeping previous', { errors });
         return false;
       }
+
+      // Only notify if config actually changed
+      const oldJson = JSON.stringify(this.current?.config);
+      const newJson = JSON.stringify(wf.config);
+      if (oldJson === newJson) return true;
+
       this.current = wf;
       for (const cb of this.listeners) {
         try {
