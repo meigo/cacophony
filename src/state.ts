@@ -89,14 +89,17 @@ export class StateStore {
         duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
       WHERE id = ?
     `);
+    const runColumns = `id, issue_id AS issueId, issue_identifier AS issueIdentifier, attempt,
+             workspace_path AS workspacePath, started_at AS startedAt, finished_at AS finishedAt,
+             status, error, exit_code AS exitCode, duration_ms AS durationMs`;
     this.stmtGetActiveRuns = this.db.prepare(`
-      SELECT * FROM runs WHERE status IN ('preparing_workspace', 'building_prompt', 'launching_agent', 'running')
+      SELECT ${runColumns} FROM runs WHERE status IN ('preparing_workspace', 'building_prompt', 'launching_agent', 'running')
     `);
     this.stmtGetRunsForIssue = this.db.prepare(`
-      SELECT * FROM runs WHERE issue_id = ? ORDER BY id DESC
+      SELECT ${runColumns} FROM runs WHERE issue_id = ? ORDER BY id DESC
     `);
     this.stmtGetLatestRun = this.db.prepare(`
-      SELECT * FROM runs WHERE issue_id = ? ORDER BY id DESC LIMIT 1
+      SELECT ${runColumns} FROM runs WHERE issue_id = ? ORDER BY id DESC LIMIT 1
     `);
 
     // Issues

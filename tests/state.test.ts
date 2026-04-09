@@ -49,9 +49,9 @@ describe('StateStore', () => {
       const latest = store.getLatestRun('issue-1');
       expect(latest).toBeDefined();
       expect(latest!.status).toBe('succeeded');
-      expect(latest!.exit_code).toBe(0);
-      expect(latest!.finished_at).not.toBeNull();
-      expect(latest!.duration_ms).toBeGreaterThanOrEqual(0);
+      expect(latest!.exitCode).toBe(0);
+      expect(latest!.finishedAt).not.toBeNull();
+      expect(latest!.durationMs).toBeGreaterThanOrEqual(0);
     });
 
     it('finishes a run with error', () => {
@@ -61,7 +61,7 @@ describe('StateStore', () => {
       const latest = store.getLatestRun('issue-1');
       expect(latest!.status).toBe('failed');
       expect(latest!.error).toBe('something broke');
-      expect(latest!.exit_code).toBe(1);
+      expect(latest!.exitCode).toBe(1);
     });
 
     it('getActiveRuns returns only active statuses', () => {
@@ -75,7 +75,7 @@ describe('StateStore', () => {
 
       const active = store.getActiveRuns();
       expect(active).toHaveLength(2);
-      const ids = active.map((r) => r.issue_id);
+      const ids = active.map((r) => r.issueId);
       expect(ids).toContain('issue-1');
       expect(ids).toContain('issue-3');
     });

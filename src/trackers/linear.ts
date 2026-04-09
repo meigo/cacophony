@@ -150,7 +150,7 @@ export class LinearTracker implements TrackerAdapter {
 
   private normalize(li: LinearIssue): Issue {
     const blockedBy = li.relations.nodes
-      .filter((r) => r.type === 'blocks')
+      .filter((r) => r.type === 'is_blocked_by')
       .map((r) => ({
         id: r.relatedIssue.id,
         identifier: r.relatedIssue.identifier,

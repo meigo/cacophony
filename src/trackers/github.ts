@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import type { TrackerAdapter, TrackerConfig, Issue } from '../types.js';
+import type { TrackerAdapter, TrackerConfig, Issue, BlockerRef } from '../types.js';
 
 interface GhIssue {
   number: number;
@@ -11,6 +11,16 @@ interface GhIssue {
   updatedAt: string;
   url: string;
   assignees: Array<{ login: string }>;
+}
+
+export function parseBlockedByNumbers(body: string | null): number[] {
+  if (!body) return [];
+  const matches = body.matchAll(/blocked\s+by\s+#(\d+)/gi);
+  const numbers = new Set<number>();
+  for (const m of matches) {
+    numbers.add(parseInt(m[1], 10));
+  }
+  return Array.from(numbers);
 }
 
 function execGh(args: string[]): string {
@@ -86,6 +96,9 @@ export class GitHubTracker implements TrackerAdapter {
         throw new Error(`Failed to fetch GitHub issues with label "${label}": ${e}`);
       }
     }
+
+    // Resolve blocker references
+    await this.resolveBlockers(issues);
 
     // Sort: createdAt ascending
     issues.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
@@ -168,6 +181,50 @@ export class GitHubTracker implements TrackerAdapter {
       }));
     } catch {
       return [];
+    }
+  }
+
+  private async resolveBlockers(issues: Issue[]): Promise<void> {
+    // Collect all unique blocker numbers across all issues
+    const allBlockerNumbers = new Set<number>();
+    const issueBlockerMap = new Map<string, number[]>();
+
+    for (const issue of issues) {
+      const numbers = parseBlockedByNumbers(issue.description);
+      // Filter out self-references
+      const selfNumber = parseInt(issue.id, 10);
+      const filtered = numbers.filter((n) => n !== selfNumber);
+      if (filtered.length > 0) {
+        issueBlockerMap.set(issue.id, filtered);
+        for (const n of filtered) allBlockerNumbers.add(n);
+      }
+    }
+
+    if (allBlockerNumbers.size === 0) return;
+
+    // Build state map: first check issues we already have
+    const stateMap = new Map<number, BlockerRef>();
+    for (const issue of issues) {
+      const num = parseInt(issue.id, 10);
+      stateMap.set(num, { id: issue.id, identifier: issue.identifier, state: issue.state });
+    }
+
+    // Fetch states for blockers we don't already have
+    const unknownNumbers = Array.from(allBlockerNumbers).filter((n) => !stateMap.has(n));
+    if (unknownNumbers.length > 0) {
+      const states = await this.fetchIssueStatesByIds(unknownNumbers.map(String));
+      for (const s of states) {
+        stateMap.set(parseInt(s.id, 10), { id: s.id, identifier: s.identifier, state: s.state });
+      }
+    }
+
+    // Attach blockers to issues
+    for (const issue of issues) {
+      const numbers = issueBlockerMap.get(issue.id);
+      if (!numbers) continue;
+      issue.blockedBy = numbers
+        .map((n) => stateMap.get(n))
+        .filter((b): b is BlockerRef => b !== undefined);
     }
   }
 }

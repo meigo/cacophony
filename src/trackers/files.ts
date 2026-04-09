@@ -8,6 +8,7 @@ interface TaskFrontMatter {
   priority?: number;
   labels?: string[];
   branch?: string;
+  blocked_by?: string[];
 }
 
 function parseTaskFile(filePath: string, identifier: string): Issue | null {
@@ -80,13 +81,49 @@ export class FilesTracker implements TrackerAdapter {
 
   async fetchCandidates(): Promise<Issue[]> {
     const files = this.listTaskFiles();
-    const issues: Issue[] = [];
+    const allIssues = new Map<string, Issue>();
 
+    // First pass: parse all files
     for (const file of files) {
       const identifier = this.fileToIdentifier(file);
       const issue = parseTaskFile(path.join(this.dir, file), identifier);
+      if (issue) allIssues.set(identifier, issue);
+    }
+
+    // Second pass: resolve blocked_by references
+    for (const file of files) {
+      const identifier = this.fileToIdentifier(file);
+      const issue = allIssues.get(identifier);
       if (!issue) continue;
 
+      const raw = fs.readFileSync(path.join(this.dir, file), 'utf-8');
+      if (raw.startsWith('---')) {
+        const endIdx = raw.indexOf('---', 3);
+        if (endIdx !== -1) {
+          try {
+            const fm = (parseYaml(raw.slice(3, endIdx)) as TaskFrontMatter) ?? {};
+            if (fm.blocked_by?.length) {
+              issue.blockedBy = fm.blocked_by
+                .filter((ref) => ref !== identifier) // no self-references
+                .map((ref) => {
+                  const blocker = allIssues.get(ref);
+                  return {
+                    id: ref,
+                    identifier: ref,
+                    state: blocker?.state ?? 'deleted',
+                  };
+                });
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+
+    // Filter to active issues
+    const issues: Issue[] = [];
+    for (const issue of allIssues.values()) {
       if (this.activeStates.includes(issue.state) && !this.terminalStates.includes(issue.state)) {
         issues.push(issue);
       }

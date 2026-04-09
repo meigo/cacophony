@@ -125,6 +125,7 @@ export class Orchestrator {
     running: Array<{ issueId: string; identifier: string; startedAt: string; attempt: number }>;
     retrying: RetryEntry[];
     claimed: string[];
+    trackerKind: string;
   } {
     return {
       running: Array.from(this.running.values()).map((r) => ({
@@ -135,6 +136,7 @@ export class Orchestrator {
       })),
       retrying: this.retryEngine?.getActiveRetries() ?? [],
       claimed: Array.from(this.claimed),
+      trackerKind: this.tracker?.kind ?? '',
     };
   }
 
@@ -250,8 +252,8 @@ export class Orchestrator {
       }
     }
 
-    // Blocker rule: if in first active state (e.g., "todo"), skip if blockers are non-terminal
-    if (state === activeStates[0] && issue.blockedBy.length > 0) {
+    // Blocker rule: skip if any blocker is non-terminal
+    if (issue.blockedBy.length > 0) {
       const hasNonTerminal = issue.blockedBy.some(
         (b) => !terminalStates.includes(b.state.toLowerCase()),
       );
@@ -287,6 +289,7 @@ export class Orchestrator {
           updatedAt: issue.updatedAt.toISOString(),
         },
         attempt: attempt || null,
+        config: wf.config,
       }) as string;
 
       // Create DB record

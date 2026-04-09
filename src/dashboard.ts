@@ -273,6 +273,7 @@ async function refresh() {
     renderRunning(status.running || []);
     renderRetrying(status.retrying || []);
     renderTasks(tasks);
+    document.getElementById('add-form').style.display = status.trackerKind === 'files' ? '' : 'none';
   } catch(e) {
     document.getElementById('conn').className = 'pill pill-red';
     document.getElementById('conn').textContent = 'disconnected';
