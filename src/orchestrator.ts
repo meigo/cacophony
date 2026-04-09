@@ -357,6 +357,7 @@ export class Orchestrator {
 
       // Agent completed
       this.running.delete(issue.id);
+      this.claimed.delete(issue.id);
 
       // After-run hook (best-effort)
       await this.workspace.runHook('afterRun', ws.path).catch(() => {});

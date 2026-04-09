@@ -60,9 +60,8 @@ export class WorkspaceManager {
     this.logger.debug(`Running hook: ${hookName}`, { workspace: workspacePath });
 
     return new Promise((resolve) => {
-      const isWindows = process.platform === 'win32';
-      const shell = isWindows ? 'cmd' : 'bash';
-      const shellArgs = isWindows ? ['/c', script] : ['-lc', script];
+      const shell = 'bash';
+      const shellArgs = ['-lc', script];
 
       const child = spawn(shell, shellArgs, {
         cwd: workspacePath,

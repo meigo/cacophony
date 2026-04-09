@@ -296,14 +296,17 @@ function renderTasks(tasks) {
   });
 }
 
-function renderHistory(runs) {
+function renderHistory(runs, runningIds) {
   const ul = document.getElementById('history');
   ul.innerHTML = '';
-  if (!runs.length) {
-    ul.appendChild(el('li', {className:'empty'}, 'No runs yet.'));
+  // Only show completed runs, exclude currently running
+  const activeStatuses = new Set(['running', 'preparing_workspace', 'building_prompt', 'launching_agent']);
+  const completed = runs.filter(r => !activeStatuses.has(r.status) && !runningIds.has(r.issueIdentifier) && !runningIds.has(r.issueId)).slice(0, 10);
+  if (!completed.length) {
+    ul.appendChild(el('li', {className:'empty'}, 'No completed runs yet.'));
     return;
   }
-  runs.forEach(r => {
+  completed.forEach(r => {
     const dotClass = {
       'succeeded':'dot-green', 'failed':'dot-red', 'timed_out':'dot-yellow',
       'canceled':'dot-gray', 'running':'dot-green',
@@ -340,7 +343,8 @@ async function refresh() {
     renderRunning(status.running || []);
     renderRetrying(status.retrying || []);
     renderTasks(tasks);
-    renderHistory(runs);
+    const runningIds = new Set((status.running || []).flatMap(r => [r.identifier, r.issueId]));
+    renderHistory(runs, runningIds);
     document.getElementById('add-form').style.display = status.trackerKind === 'files' ? '' : 'none';
   } catch(e) {
     document.getElementById('conn').className = 'pill pill-red';

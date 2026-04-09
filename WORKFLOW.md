@@ -15,8 +15,18 @@ agent:
 hooks:
   after_create: |
     git clone https://github.com/meigo/caco-web.git .
+    if [ -d "../_node_modules_cache" ]; then
+      cp -r "../_node_modules_cache" node_modules
+    fi
   before_run: |
     git checkout main && git pull origin main
+    if [ -f "package.json" ] && [ -f "package-lock.json" ]; then
+      npm ci --prefer-offline 2>/dev/null || npm install --prefer-offline 2>/dev/null || true
+    fi
+  after_run: |
+    if [ -d "node_modules" ] && [ ! -d "../_node_modules_cache" ]; then
+      cp -r node_modules "../_node_modules_cache"
+    fi
 
 workspace:
   root: ./workspaces
@@ -74,6 +84,8 @@ You are an autonomous coding agent working on issue **{{issue.identifier}}**.
 4. Write tests for the changes you made
 5. Run all tests and fix any failures — do not move on until everything passes
 6. Commit, push the branch, and open a pull request with a clear description
+7. Merge the pull request: `gh pr merge --squash --delete-branch`
+8. Mark this issue as done: `gh issue edit {{issue.id}} --repo {{config.tracker.repo}} --add-label done --remove-label todo`
 
 {% if attempt %}
 This is retry attempt #{{attempt}}. Check the previous work in this workspace and continue from where it left off.
