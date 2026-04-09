@@ -1,0 +1,7 @@
+node_modules/
+dist/
+workspaces/
+tasks/
+*.db
+*.db-journal
+.cacophony-prompt.md
