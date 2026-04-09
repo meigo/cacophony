@@ -85,6 +85,13 @@ export function dashboardHtml(): string {
   .dot-yellow { background: #d29922; }
   .dot-red { background: #f85149; }
   .dot-gray { background: #484f58; }
+  .task-subtitle { font-size: 0.75rem; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-info { flex: 1; min-width: 0; }
+  .task-link { color: #58a6ff; text-decoration: none; font-size: 0.7rem; }
+  .task-link:hover { text-decoration: underline; }
+  .elapsed { font-variant-numeric: tabular-nums; }
+  .label-tag { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.65rem; background: #30363d; color: #8b949e; margin-left: 4px; }
+  .run-error { font-size: 0.7rem; color: #f85149; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head><body>
 
@@ -132,6 +139,11 @@ export function dashboardHtml(): string {
   <ul class="task-list" id="tasks"></ul>
 </div>
 
+<div class="section" id="history-section">
+  <div class="section-title">Recent Runs</div>
+  <ul class="task-list" id="history"></ul>
+</div>
+
 <p class="refresh-info">Auto-refreshes every 3s</p>
 
 <script>
@@ -174,6 +186,23 @@ function timeAgo(iso) {
   return Math.floor(s/86400) + 'd ago';
 }
 
+function elapsed(iso) {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  if (m > 0) return m + 'm ' + sec + 's';
+  return sec + 's';
+}
+
+function durationStr(ms) {
+  if (ms == null) return '-';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  if (m > 0) return m + 'm ' + sec + 's';
+  return sec + 's';
+}
+
 function renderStats(status, tasks) {
   const s = document.getElementById('stats');
   const running = status.running?.length || 0;
@@ -199,11 +228,17 @@ function renderRunning(entries) {
   ul.innerHTML = '';
   sec.style.display = entries.length ? '' : 'none';
   entries.forEach(r => {
+    const labels = (r.labels || []).map(l => el('span', {className:'label-tag'}, l));
+    const titleRow = [el('span', {className:'task-title'}, r.title || 'Running')];
+    if (r.url) titleRow.push(el('a', {className:'task-link', href:r.url, target:'_blank'}, 'view issue'));
+
     ul.appendChild(el('li', {className:'task-item'},
       el('span', {className:'dot dot-green'}),
       el('span', {className:'task-id'}, r.identifier),
-      el('span', {className:'task-title'}, 'Running (attempt ' + r.attempt + ')'),
-      el('span', {className:'task-meta'}, 'started ' + timeAgo(r.startedAt)),
+      el('div', {className:'task-info'},
+        el('div', null, ...titleRow, ...labels),
+        el('div', {className:'task-subtitle'}, 'attempt ' + r.attempt + ' \u00B7 running for ' + elapsed(r.startedAt))
+      ),
       el('div', {className:'task-actions'},
         el('button', {className:'btn btn-danger', onclick: () => stopTask(r.identifier)}, 'Stop')
       )
@@ -261,11 +296,43 @@ function renderTasks(tasks) {
   });
 }
 
+function renderHistory(runs) {
+  const ul = document.getElementById('history');
+  ul.innerHTML = '';
+  if (!runs.length) {
+    ul.appendChild(el('li', {className:'empty'}, 'No runs yet.'));
+    return;
+  }
+  runs.forEach(r => {
+    const dotClass = {
+      'succeeded':'dot-green', 'failed':'dot-red', 'timed_out':'dot-yellow',
+      'canceled':'dot-gray', 'running':'dot-green',
+    }[r.status] || 'dot-gray';
+
+    const details = [r.status];
+    if (r.durationMs != null) details.push(durationStr(r.durationMs));
+    if (r.attempt > 0) details.push('attempt ' + r.attempt);
+
+    const children = [
+      el('span', {className:'dot ' + dotClass}),
+      el('span', {className:'task-id'}, r.issueIdentifier),
+      el('span', {className:'task-meta'}, details.join(' \u00B7 ')),
+      el('span', {className:'task-meta'}, r.startedAt ? timeAgo(r.startedAt) : ''),
+    ];
+    if (r.error && r.status !== 'succeeded') {
+      children.push(el('span', {className:'run-error', title: r.error}, r.error));
+    }
+
+    ul.appendChild(el('li', {className:'task-item', style: r.status === 'succeeded' ? 'opacity:0.7' : ''}, ...children));
+  });
+}
+
 async function refresh() {
   try {
-    const [status, tasks] = await Promise.all([
+    const [status, tasks, runs] = await Promise.all([
       fetchJSON('/api/v1/status'),
       fetchJSON('/api/v1/tasks').catch(() => []),
+      fetchJSON('/api/v1/runs').catch(() => []),
     ]);
     document.getElementById('conn').className = 'pill pill-green';
     document.getElementById('conn').textContent = 'live';
@@ -273,6 +340,7 @@ async function refresh() {
     renderRunning(status.running || []);
     renderRetrying(status.retrying || []);
     renderTasks(tasks);
+    renderHistory(runs);
     document.getElementById('add-form').style.display = status.trackerKind === 'files' ? '' : 'none';
   } catch(e) {
     document.getElementById('conn').className = 'pill pill-red';

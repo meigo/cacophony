@@ -121,8 +121,20 @@ export class Orchestrator {
     return this.tracker;
   }
 
+  getRecentRuns(limit: number = 20): import('./types.js').RunRecord[] {
+    return this.store.getRecentRuns(limit);
+  }
+
   getStatus(): {
-    running: Array<{ issueId: string; identifier: string; startedAt: string; attempt: number }>;
+    running: Array<{
+      issueId: string;
+      identifier: string;
+      title: string;
+      url: string | null;
+      labels: string[];
+      startedAt: string;
+      attempt: number;
+    }>;
     retrying: RetryEntry[];
     claimed: string[];
     trackerKind: string;
@@ -131,6 +143,9 @@ export class Orchestrator {
       running: Array.from(this.running.values()).map((r) => ({
         issueId: r.issueId,
         identifier: r.issueIdentifier,
+        title: r.issue.title,
+        url: r.issue.url,
+        labels: r.issue.labels,
         startedAt: r.startedAt.toISOString(),
         attempt: r.attempt,
       })),

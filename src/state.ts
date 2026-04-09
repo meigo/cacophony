@@ -56,6 +56,7 @@ export class StateStore {
   private stmtGetActiveRuns: Database.Statement;
   private stmtGetRunsForIssue: Database.Statement;
   private stmtGetLatestRun: Database.Statement;
+  private stmtGetRecentRuns: Database.Statement;
 
   private stmtUpsertIssue: Database.Statement;
   private stmtGetIssue: Database.Statement;
@@ -100,6 +101,9 @@ export class StateStore {
     `);
     this.stmtGetLatestRun = this.db.prepare(`
       SELECT ${runColumns} FROM runs WHERE issue_id = ? ORDER BY id DESC LIMIT 1
+    `);
+    this.stmtGetRecentRuns = this.db.prepare(`
+      SELECT ${runColumns} FROM runs ORDER BY id DESC LIMIT ?
     `);
 
     // Issues
@@ -180,6 +184,10 @@ export class StateStore {
 
   getLatestRun(issueId: string): RunRecord | undefined {
     return this.stmtGetLatestRun.get(issueId) as RunRecord | undefined;
+  }
+
+  getRecentRuns(limit: number = 20): RunRecord[] {
+    return this.stmtGetRecentRuns.all(limit) as RunRecord[];
   }
 
   // --- Issues ---

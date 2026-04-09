@@ -522,6 +522,13 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
         return;
       }
 
+      // --- Runs API ---
+      if (req.method === 'GET' && url.pathname === '/api/v1/runs') {
+        const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
+        json(200, orchestrator.getRecentRuns(Math.min(limit, 100)));
+        return;
+      }
+
       // --- Stop API ---
       if (req.method === 'POST' && url.pathname.startsWith('/api/v1/stop/')) {
         const identifier = decodeURIComponent(url.pathname.split('/').pop()!);
