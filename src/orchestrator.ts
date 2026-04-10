@@ -1,5 +1,12 @@
 import { Liquid } from 'liquidjs';
-import type { Issue, RunEntry, RetryEntry, WorkflowConfig, TrackerAdapter } from './types.js';
+import type {
+  Issue,
+  RunEntry,
+  RetryEntry,
+  WorkflowConfig,
+  TrackerAdapter,
+  RunRecord,
+} from './types.js';
 import type { ConfigManager } from './config.js';
 import type { StateStore } from './state.js';
 import { WorkspaceManager } from './workspace.js';
@@ -132,7 +139,7 @@ export class Orchestrator {
     return this.tracker;
   }
 
-  getRecentRuns(limit: number = 20): import('./types.js').RunRecord[] {
+  getRecentRuns(limit: number = 20): RunRecord[] {
     return this.store.getRecentRuns(limit);
   }
 
@@ -149,7 +156,10 @@ export class Orchestrator {
     retrying: RetryEntry[];
     claimed: string[];
     trackerKind: string;
+    activeStates: string[];
+    terminalStates: string[];
   } {
+    const config = this.configManager.getCurrent().config;
     return {
       running: Array.from(this.running.values()).map((r) => ({
         issueId: r.issueId,
@@ -163,6 +173,8 @@ export class Orchestrator {
       retrying: this.retryEngine?.getActiveRetries() ?? [],
       claimed: Array.from(this.claimed),
       trackerKind: this.tracker?.kind ?? '',
+      activeStates: config.tracker.activeStates ?? [],
+      terminalStates: config.tracker.terminalStates ?? [],
     };
   }
 
@@ -250,14 +262,8 @@ export class Orchestrator {
     if (!issue.id || !issue.identifier || !issue.title || !issue.state) return false;
 
     const state = issue.state.toLowerCase();
-    const activeStates =
-      config.tracker.kind === 'github'
-        ? (config.tracker.activeLabels ?? [])
-        : (config.tracker.activeStates ?? []);
-    const terminalStates =
-      config.tracker.kind === 'github'
-        ? (config.tracker.terminalLabels ?? [])
-        : (config.tracker.terminalStates ?? []);
+    const activeStates = config.tracker.activeStates ?? [];
+    const terminalStates = config.tracker.terminalStates ?? [];
 
     // Must be in active state, not terminal
     if (!activeStates.includes(state)) return false;
@@ -308,6 +314,10 @@ export class Orchestrator {
 
       // Render prompt
       const wf = this.configManager.getCurrent();
+      const tasksDir =
+        this.tracker.kind === 'files'
+          ? (this.tracker as { getDir?: () => string }).getDir?.()
+          : undefined;
       const promptContent = liquid.parseAndRenderSync(wf.promptTemplate, {
         issue: {
           ...issue,
@@ -316,12 +326,9 @@ export class Orchestrator {
         },
         attempt: attempt || null,
         config: wf.config,
+        project_root: this.workspace.getProjectRoot(),
+        tasks_dir: tasksDir,
       }) as string;
-
-      // Auto-label: add in-progress
-      if (this.tracker.addLabel) {
-        await this.tracker.addLabel(issue.id, 'in-progress').catch(() => {});
-      }
 
       // Create DB record
       const runId = this.store.createRun(issue.id, issue.identifier, attempt, ws.path);
@@ -356,7 +363,9 @@ export class Orchestrator {
             if (evt.type === 'assistant' && evt.message?.content) {
               for (const block of evt.message.content) {
                 if (block.type === 'tool_use') {
-                  log.info(`Tool: ${block.name}`, { input: block.input?.command || block.input?.description || '' });
+                  log.info(`Tool: ${block.name}`, {
+                    input: block.input?.command || block.input?.description || '',
+                  });
                 } else if (block.type === 'text' && block.text) {
                   log.info(`Agent: ${block.text.slice(0, 200)}`);
                 }
@@ -378,11 +387,6 @@ export class Orchestrator {
       // After-run hook (best-effort)
       await this.workspace.runHook('afterRun', ws.path).catch(() => {});
 
-      // Always remove in-progress label on completion
-      if (this.tracker.removeLabel) {
-        await this.tracker.removeLabel(issue.id, 'in-progress').catch(() => {});
-      }
-
       if (result.timedOut) {
         this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out');
         log.warn('Agent timed out', { durationMs: result.durationMs });
@@ -390,17 +394,23 @@ export class Orchestrator {
       } else if (result.exitCode === 0) {
         this.store.finishRun(runId, 'succeeded', 0);
         log.info('Agent succeeded', { durationMs: result.durationMs });
-        // Schedule continuation — issue might still need work
-        this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
+        if (this.tracker.setIssueState) {
+          // Tracker can mark tasks done — do that, clean the worktree, and don't loop.
+          // The git branch cacophony/<id> still preserves the agent's commits.
+          await this.tracker.setIssueState(issue.id, 'done').catch((e) => {
+            log.warn('Failed to mark issue done', { error: String(e) });
+          });
+          await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
+            log.warn('Failed to remove worktree after success', { error: String(e) });
+          });
+        } else {
+          // No way to advance state — fall back to continuation pattern.
+          this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
+        }
       } else {
         const errMsg = result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
         this.store.finishRun(runId, 'failed', result.exitCode, errMsg);
         log.warn('Agent failed', { exitCode: result.exitCode, durationMs: result.durationMs });
-
-        // Add failed label after 3 attempts
-        if (attempt + 1 >= 3 && this.tracker.addLabel) {
-          await this.tracker.addLabel(issue.id, 'failed').catch(() => {});
-        }
 
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
       }
@@ -462,14 +472,8 @@ export class Orchestrator {
     if (this.running.size === 0) return;
 
     const config = this.configManager.getCurrent().config;
-    const terminalStates =
-      config.tracker.kind === 'github'
-        ? (config.tracker.terminalLabels ?? [])
-        : (config.tracker.terminalStates ?? []);
-    const activeStates =
-      config.tracker.kind === 'github'
-        ? (config.tracker.activeLabels ?? [])
-        : (config.tracker.activeStates ?? []);
+    const terminalStates = config.tracker.terminalStates ?? [];
+    const activeStates = config.tracker.activeStates ?? [];
 
     // Part A: Stall detection (using agent timeout as proxy)
     const now = Date.now();

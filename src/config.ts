@@ -27,20 +27,10 @@ const DEFAULTS = {
   workspace: { projectRoot: '.' },
   hooks: { timeoutMs: 60_000 },
   tracker: {
-    activeStates: ['todo', 'in progress'],
-    terminalStates: ['closed', 'cancelled', 'canceled', 'duplicate', 'done'],
-    activeLabels: ['todo', 'in-progress'],
-    terminalLabels: ['done', 'wontfix', 'closed'],
+    activeStates: ['todo', 'in-progress'],
+    terminalStates: ['done', 'cancelled', 'wontfix'],
   },
 };
-
-function resolveEnvVar(value: string): string {
-  if (value.startsWith('$')) {
-    const varName = value.slice(1);
-    return process.env[varName] ?? '';
-  }
-  return value;
-}
 
 function expandPath(p: string): string {
   if (p.startsWith('~')) {
@@ -61,13 +51,13 @@ export function loadWorkflow(filePath: string): WorkflowDefinition {
   if (raw.startsWith('---')) {
     const endIdx = raw.indexOf('---', 3);
     if (endIdx === -1) {
-      throw new Error('WORKFLOW.md: unclosed YAML front matter');
+      throw new Error('config file: unclosed YAML front matter');
     }
     const yamlStr = raw.slice(3, endIdx);
     promptTemplate = raw.slice(endIdx + 3).trim();
     const parsed = parseYaml(yamlStr);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('WORKFLOW.md: front matter must be a YAML map');
+      throw new Error('config file: front matter must be a YAML map');
     }
     frontMatter = parsed as Record<string, unknown>;
   } else {
@@ -87,18 +77,10 @@ function buildConfig(fm: Record<string, unknown>): WorkflowConfig {
   const s = (fm.server ?? undefined) as { port?: number } | undefined;
 
   const tracker: TrackerConfig = {
-    kind: String(t.kind ?? ''),
-    repo: t.repo != null ? String(t.repo) : undefined,
-    endpoint: t.endpoint != null ? String(t.endpoint) : undefined,
-    apiKey: t.api_key != null ? resolveEnvVar(String(t.api_key)) : undefined,
-    projectSlug: t.project_slug != null ? String(t.project_slug) : undefined,
+    kind: String(t.kind ?? 'files'),
     dir: t.dir != null ? expandPath(String(t.dir)) : undefined,
-    activeLabels:
-      lowercase(t.active_labels as string[] | undefined) ?? DEFAULTS.tracker.activeLabels,
     activeStates:
       lowercase(t.active_states as string[] | undefined) ?? DEFAULTS.tracker.activeStates,
-    terminalLabels:
-      lowercase(t.terminal_labels as string[] | undefined) ?? DEFAULTS.tracker.terminalLabels,
     terminalStates:
       lowercase(t.terminal_states as string[] | undefined) ?? DEFAULTS.tracker.terminalStates,
   };
@@ -137,16 +119,6 @@ function buildConfig(fm: Record<string, unknown>): WorkflowConfig {
 
 export function validateConfig(config: WorkflowConfig): string[] {
   const errors: string[] = [];
-
-  if (!config.tracker.kind) {
-    errors.push('tracker.kind is required');
-  } else if (config.tracker.kind === 'github') {
-    if (!config.tracker.repo) errors.push('tracker.repo is required for GitHub tracker');
-  } else if (config.tracker.kind === 'linear') {
-    if (!config.tracker.apiKey) errors.push('tracker.api_key is required for Linear tracker');
-    if (!config.tracker.projectSlug)
-      errors.push('tracker.project_slug is required for Linear tracker');
-  }
 
   if (!config.agent.command) {
     errors.push('agent.command is required');
@@ -197,7 +169,7 @@ export class ConfigManager {
   startWatching(): void {
     this.watcher = chokidar.watch(this.filePath, { persistent: false });
     this.watcher.on('change', () => {
-      this.logger.info('WORKFLOW.md changed, reloading...');
+      this.logger.info('Config changed, reloading...');
       this.reload();
     });
   }

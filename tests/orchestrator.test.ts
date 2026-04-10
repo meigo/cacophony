@@ -14,10 +14,10 @@ function createWorkflow(dir: string, overrides: { agentCommand?: string } = {}):
     'WORKFLOW.md',
     `---
 tracker:
-  kind: github
-  repo: "test/repo"
-  active_labels: ["todo", "in-progress"]
-  terminal_labels: ["done", "closed"]
+  kind: files
+  dir: "./tasks"
+  active_states: ["todo", "in-progress"]
+  terminal_states: ["done", "closed"]
 
 agent:
   command: "${agentCmd}"

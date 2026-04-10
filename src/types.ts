@@ -29,8 +29,7 @@ export interface TrackerAdapter {
   fetchCandidates(): Promise<Issue[]>;
   fetchIssueStatesByIds(ids: string[]): Promise<Pick<Issue, 'id' | 'identifier' | 'state'>[]>;
   fetchTerminalIssues?(): Promise<Issue[]>;
-  addLabel?(issueId: string, label: string): Promise<void>;
-  removeLabel?(issueId: string, label: string): Promise<void>;
+  setIssueState?(issueId: string, state: string): Promise<void>;
 }
 
 // === Workflow / Config ===
@@ -51,14 +50,8 @@ export interface WorkflowConfig {
 
 export interface TrackerConfig {
   kind: string;
-  repo?: string;
-  endpoint?: string;
-  apiKey?: string;
-  projectSlug?: string;
   dir?: string;
-  activeLabels?: string[];
   activeStates?: string[];
-  terminalLabels?: string[];
   terminalStates?: string[];
 }
 
@@ -74,8 +67,8 @@ export interface AgentConfig {
 }
 
 export interface WorkspaceConfig {
-  projectRoot: string;   // defaults to directory containing WORKFLOW.md
-  baseBranch?: string;   // defaults to auto-detected (origin/HEAD or main)
+  projectRoot: string; // defaults to the git repo root
+  baseBranch?: string; // defaults to auto-detected (origin/HEAD or main)
 }
 
 export interface HooksConfig {

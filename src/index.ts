@@ -15,18 +15,18 @@ const USAGE = `
 ${chalk.bold('cacophony')} — Provider-agnostic agent orchestrator
 
 ${chalk.bold('Usage:')}
-  cacophony init                             Generate a WORKFLOW.md interactively
-  cacophony start [workflow.md] [--port N]   Start the daemon
-  cacophony status [workflow.md]             Show current state
-  cacophony stop <identifier> [workflow.md]  Cancel a running issue
-  cacophony help                             Show this help
+  cacophony init                                       Generate .cacophony/config.md interactively
+  cacophony start [workflow.md] [--port N|--no-server] Start the daemon (dashboard on :8080 by default)
+  cacophony status [workflow.md]                       Show current state
+  cacophony stop <identifier> [workflow.md]            Cancel a running issue
+  cacophony help                                       Show this help
 
 ${chalk.bold('Examples:')}
   cacophony init
-  cacophony start WORKFLOW.md
-  cacophony start WORKFLOW.md --port 8080
-  cacophony status WORKFLOW.md
-  cacophony stop GH-42 WORKFLOW.md
+  cacophony start
+  cacophony start --port 9000
+  cacophony start --no-server
+  cacophony stop fix-login
 `;
 
 async function main(): Promise<void> {
@@ -59,10 +59,30 @@ async function main(): Promise<void> {
   }
 }
 
+const DEFAULT_CONFIG_PATH = '.cacophony/config.md';
+const LEGACY_CONFIG_PATH = 'WORKFLOW.md';
+
 function resolveWorkflowPath(args: string[]): string {
-  // Find first arg that's not a flag
+  // Explicit path argument always wins
   const wfArg = args.find((a) => !a.startsWith('--'));
-  return path.resolve(wfArg ?? 'WORKFLOW.md');
+  if (wfArg) return path.resolve(wfArg);
+
+  // Default: prefer .cacophony/config.md, fall back to WORKFLOW.md for legacy projects
+  const newPath = path.resolve(DEFAULT_CONFIG_PATH);
+  if (fs.existsSync(newPath)) return newPath;
+
+  const legacyPath = path.resolve(LEGACY_CONFIG_PATH);
+  if (fs.existsSync(legacyPath)) {
+    console.error(
+      chalk.yellow(
+        `  ⚠  Found legacy ${LEGACY_CONFIG_PATH} at the project root. ` +
+          `Move it to ${DEFAULT_CONFIG_PATH} when convenient.`,
+      ),
+    );
+    return legacyPath;
+  }
+
+  return newPath;
 }
 
 function getFlag(args: string[], flag: string): string | undefined {
@@ -75,6 +95,33 @@ function resolveDbPath(projectRoot: string): string {
   const cacoDir = path.join(resolvedRoot, '.cacophony');
   fs.mkdirSync(cacoDir, { recursive: true });
   return path.join(cacoDir, 'cacophony.db');
+}
+
+function slugifyPrompt(prompt: string): string {
+  // Take the first non-empty line, strip a leading "# " if it looks like a heading
+  const firstLine = prompt
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0)
+    ?.replace(/^#+\s*/, '');
+  const source = firstLine ?? 'task';
+  const slug = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  return slug || 'task';
+}
+
+function uniqueIdentifier(tracker: FilesTracker, base: string): string {
+  if (!tracker.getTask(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`;
+    if (!tracker.getTask(candidate)) return candidate;
+  }
+  // Extremely unlikely fallback
+  return `${base}-${Date.now()}`;
 }
 
 // --- Init ---
@@ -107,34 +154,44 @@ function choose(
   });
 }
 
-const AGENT_PRESETS: Record<string, { command: string; delivery: string }> = {
+interface AgentPreset {
+  command: (model?: string) => string;
+  delivery: string;
+  defaultModel?: string;
+}
+
+const AGENT_PRESETS: Record<string, AgentPreset> = {
   'Claude Code': {
-    command: 'claude -p {{prompt_file}} --output-format stream-json',
+    command: (model) =>
+      `claude -p {{prompt_file}} --output-format stream-json --verbose --dangerously-skip-permissions${model ? ` --model ${model}` : ''}`,
     delivery: 'file',
+    defaultModel: 'claude-sonnet-4-6',
   },
   Codex: {
-    command: 'codex --prompt {{prompt_file}}',
+    command: (model) => `codex --prompt {{prompt_file}}${model ? ` --model ${model}` : ''}`,
     delivery: 'file',
+    defaultModel: 'gpt-5',
   },
   Aider: {
-    command: 'aider --message-file {{prompt_file}} --yes',
+    command: () => 'aider --message-file {{prompt_file}} --yes',
     delivery: 'file',
   },
   'Gemini CLI': {
-    command: 'gemini < {{prompt_file}}',
+    command: () => 'gemini < {{prompt_file}}',
     delivery: 'file',
   },
   Custom: {
-    command: '',
+    command: () => '',
     delivery: 'file',
   },
 };
 
 async function cmdInit(): Promise<void> {
-  const outPath = path.resolve('WORKFLOW.md');
+  const outPath = path.resolve(DEFAULT_CONFIG_PATH);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
   if (fs.existsSync(outPath)) {
-    console.log(chalk.yellow(`\n  WORKFLOW.md already exists at ${outPath}`));
+    console.log(chalk.yellow(`\n  ${DEFAULT_CONFIG_PATH} already exists at ${outPath}`));
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const overwrite = await ask(rl, 'Overwrite?', 'n');
     if (overwrite.toLowerCase() !== 'y' && overwrite.toLowerCase() !== 'yes') {
@@ -146,84 +203,16 @@ async function cmdInit(): Promise<void> {
   }
 
   console.log(chalk.bold('\n  Cacophony Init\n'));
-  console.log(chalk.dim('  Generate a WORKFLOW.md for your project.\n'));
+  console.log(chalk.dim(`  Generate ${DEFAULT_CONFIG_PATH} for your project.\n`));
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  // --- Tracker ---
-  const trackerChoice = await choose(
-    rl,
-    'Issue tracker:',
-    ['Local files (simplest)', 'GitHub Issues', 'Linear'],
-    0,
-  );
-
-  let trackerBlock: string;
-
-  if (trackerChoice === 'Local files (simplest)') {
-    const tasksDir = await ask(rl, 'Tasks directory', './tasks');
-    const activeStates = await ask(rl, 'Active states (comma-separated)', 'todo, in-progress');
-    const terminalStates = await ask(rl, 'Terminal states (comma-separated)', 'done, cancelled');
-
-    const fmtStates = (s: string) =>
-      s
-        .split(',')
-        .map((l) => `"${l.trim()}"`)
-        .join(', ');
-
-    trackerBlock = `tracker:
-  kind: files
-  dir: "${tasksDir}"
-  active_states: [${fmtStates(activeStates)}]
-  terminal_states: [${fmtStates(terminalStates)}]`;
-  } else if (trackerChoice === 'GitHub Issues') {
-    // Try to detect repo from git remote
-    let detectedRepo = '';
-    try {
-      const { execFileSync } = await import('node:child_process');
-      const remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
-        encoding: 'utf-8',
-        timeout: 5000,
-      }).trim();
-      const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
-      if (match) detectedRepo = match[1];
-    } catch {
-      // not a git repo or no remote
-    }
-
-    const repo = await ask(rl, 'GitHub repo (owner/repo)', detectedRepo || undefined);
-    const activeLabels = await ask(rl, 'Active labels (comma-separated)', 'todo, in-progress');
-    const terminalLabels = await ask(rl, 'Terminal labels (comma-separated)', 'done, wontfix');
-
-    const fmtLabels = (s: string) =>
-      s
-        .split(',')
-        .map((l) => `"${l.trim()}"`)
-        .join(', ');
-
-    trackerBlock = `tracker:
-  kind: github
-  repo: "${repo}"
-  active_labels: [${fmtLabels(activeLabels)}]
-  terminal_labels: [${fmtLabels(terminalLabels)}]`;
-  } else {
-    const projectSlug = await ask(rl, 'Linear project slug');
-    const apiKeyVar = await ask(rl, 'API key env var name', 'LINEAR_API_KEY');
-
-    trackerBlock = `tracker:
-  kind: linear
-  api_key: "$${apiKeyVar}"
-  project_slug: "${projectSlug}"
-  active_states: ["Todo", "In Progress"]
-  terminal_states: ["Done", "Cancelled", "Closed"]`;
-  }
 
   // --- Agent ---
   const agentNames = Object.keys(AGENT_PRESETS);
   const agentChoice = await choose(rl, 'Coding agent:', agentNames, 0);
   const preset = AGENT_PRESETS[agentChoice];
 
-  let agentCommand = preset.command;
+  let agentCommand = preset.command();
   let agentDelivery = preset.delivery;
 
   if (agentChoice === 'Custom') {
@@ -233,6 +222,9 @@ async function cmdInit(): Promise<void> {
     );
     const deliveryChoice = await choose(rl, 'How to pass the prompt:', ['file', 'stdin', 'arg'], 0);
     agentDelivery = deliveryChoice;
+  } else if (preset.defaultModel) {
+    const model = await ask(rl, 'Model', preset.defaultModel);
+    agentCommand = preset.command(model);
   }
 
   const maxConcurrent = await ask(rl, 'Max concurrent agents', '3');
@@ -241,8 +233,6 @@ async function cmdInit(): Promise<void> {
 
   // --- Generate ---
   const workflow = `---
-${trackerBlock}
-
 agent:
   command: "${agentCommand}"
   prompt_delivery: ${agentDelivery}
@@ -254,7 +244,7 @@ polling:
   interval_ms: 30000
 ---
 
-You are an autonomous coding agent working on issue **{{issue.identifier}}**.
+You are an autonomous coding agent working on task **{{issue.identifier}}**.
 
 You are running inside a git worktree at the project root. A new branch has already been created for you.
 
@@ -264,14 +254,26 @@ You are running inside a git worktree at the project root. A new branch has alre
 
 {{issue.description}}
 
-## Instructions
+## Decide first: do it, or split it
+
+Before writing any code, judge whether this task is small enough to finish in a single agent run.
+
+- **If it is small** (one focused change, one feature, a single component), proceed to the instructions below and do the work.
+- **If it spans multiple distinct workstreams** (e.g. project scaffolding + multiple pages + styling + integration), split it into smaller tasks and exit immediately. Do not write any code yourself in that case — your only job is planning.
+
+To split the task, write 2–6 markdown files into {{tasks_dir}}/. Each file represents one subtask and must be self-contained: the agent that picks it up will not have access to this prompt or to the other subtasks.
+
+Each subtask file must have YAML front matter with at least state: todo (and optionally priority: 1-4), followed by a short markdown body that fully describes the subtask. The filename should be a short slug ending in .md (letters, digits, hyphens only). If subtask B depends on subtask A, add blocked_by: [A-slug] to B's front matter and cacophony will run them in order.
+
+After writing the files, exit cleanly. Cacophony will pick up the subtasks on the next poll.
+
+## Instructions (only if you decided to do the task yourself)
 
 1. Implement the required changes in this worktree
-2. Inspect the project stack and run appropriate tests (unit, lint, type check)
+2. Inspect the project stack and run appropriate tests (unit, lint, type check) where they exist
 3. Fix any failures — do not move on until everything passes
-4. Commit and push your branch
-5. Open a pull request and merge it: \`gh pr merge --squash --delete-branch\`
-6. Close this issue when done
+4. Commit your work on this branch (cacophony will auto-commit anything you forget, but explicit commits give better history)
+5. Exit cleanly when done — cacophony will mark the task complete and clean up the worktree
 
 {% if attempt %}
 This is retry attempt #{{attempt}}. The worktree may contain previous work — continue from where it left off.
@@ -282,7 +284,7 @@ This is retry attempt #{{attempt}}. The worktree may contain previous work — c
 
   console.log(chalk.green(`\n  Created ${outPath}\n`));
   console.log(chalk.dim('  Review and customize the file, then run:\n'));
-  console.log(`    ${chalk.bold('cacophony start WORKFLOW.md')}\n`);
+  console.log(`    ${chalk.bold('cacophony start')}\n`);
 }
 
 // --- Start ---
@@ -315,9 +317,9 @@ async function cmdStart(args: string[]): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // Optional HTTP server
-  const port = portStr ? parseInt(portStr, 10) : config.server?.port;
-  if (port !== undefined) {
+  // HTTP dashboard — defaults to 8080 unless --no-server is passed
+  if (!args.includes('--no-server')) {
+    const port = portStr ? parseInt(portStr, 10) : (config.server?.port ?? 8080);
     startHttpServer(orchestrator, port, logger);
   }
 
@@ -517,12 +519,13 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
           return;
         }
         const body = JSON.parse(await readBody(req));
-        const { identifier, priority, content } = body;
-        if (!identifier || !content) {
-          json(400, { error: 'identifier and content are required' });
+        const { prompt, priority } = body;
+        if (typeof prompt !== 'string' || prompt.trim() === '') {
+          json(400, { error: 'prompt is required' });
           return;
         }
-        filesTracker.createTask(identifier, 'todo', priority ?? null, content);
+        const identifier = uniqueIdentifier(filesTracker, slugifyPrompt(prompt));
+        filesTracker.createTask(identifier, 'todo', priority ?? null, prompt.trim());
         logger.info(`Task created via API: ${identifier}`);
         json(201, { created: true, identifier });
         return;
@@ -559,8 +562,24 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
     }
   });
 
-  server.listen(port, '127.0.0.1', () => {
-    logger.info(`HTTP server listening on http://127.0.0.1:${port}`);
+  const MAX_PORT_ATTEMPTS = 20;
+  let attempt = 0;
+  let currentPort = port;
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
+      attempt++;
+      const nextPort = currentPort + 1;
+      logger.warn(`Port ${currentPort} in use, trying ${nextPort}`);
+      currentPort = nextPort;
+      server.listen(currentPort, '127.0.0.1');
+    } else {
+      logger.error(`HTTP server failed to bind`, { error: String(err) });
+    }
+  });
+
+  server.listen(currentPort, '127.0.0.1', () => {
+    logger.info(`HTTP server listening on http://127.0.0.1:${currentPort}`);
   });
 }
 

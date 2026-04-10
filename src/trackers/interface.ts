@@ -3,14 +3,6 @@ import type { TrackerAdapter, TrackerConfig } from '../types.js';
 
 export async function createTracker(config: TrackerConfig): Promise<TrackerAdapter> {
   switch (config.kind) {
-    case 'github': {
-      const { GitHubTracker } = await import('./github.js');
-      return new GitHubTracker(config);
-    }
-    case 'linear': {
-      const { LinearTracker } = await import('./linear.js');
-      return new LinearTracker(config);
-    }
     case 'files': {
       const { FilesTracker } = await import('./files.js');
       return new FilesTracker(config);

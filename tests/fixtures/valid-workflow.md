@@ -1,9 +1,9 @@
 ---
 tracker:
-  kind: github
-  repo: 'test-org/test-repo'
-  active_labels: ['todo', 'in-progress']
-  terminal_labels: ['done', 'wontfix']
+  kind: files
+  dir: './tasks'
+  active_states: ['todo', 'in-progress']
+  terminal_states: ['done', 'wontfix']
 
 agent:
   command: 'echo {{prompt_file}}'

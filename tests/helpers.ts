@@ -26,13 +26,13 @@ export function cleanup(dir: string): void {
 export function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: '1',
-    identifier: 'GH-1',
+    identifier: 'task-1',
     title: 'Test issue',
     description: 'Test description',
     priority: null,
     state: 'todo',
     branchName: null,
-    url: 'https://github.com/test/repo/issues/1',
+    url: null,
     labels: ['todo'],
     blockedBy: [],
     createdAt: new Date('2026-01-01'),
@@ -47,8 +47,7 @@ export function makeIssue(overrides: Partial<Issue> = {}): Issue {
  */
 export function tmpGitRepo(prefix = 'cacophony-test-repo-'): string {
   const dir = tmpDir(prefix);
-  const run = (args: string[]) =>
-    execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  const run = (args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
   run(['init', '-q', '-b', 'main']);
   run(['config', 'user.email', 'test@example.com']);
   run(['config', 'user.name', 'Test User']);

@@ -67,7 +67,7 @@ export class FilesTracker implements TrackerAdapter {
   private terminalStates: string[];
 
   constructor(config: TrackerConfig) {
-    this.dir = path.resolve(config.dir ?? 'tasks');
+    this.dir = path.resolve(config.dir ?? '.cacophony/tasks');
     this.activeStates = config.activeStates ?? ['todo', 'in-progress'];
     this.terminalStates = config.terminalStates ?? ['done', 'cancelled', 'wontfix'];
 
@@ -179,6 +179,10 @@ export class FilesTracker implements TrackerAdapter {
     }
 
     return issues;
+  }
+
+  async setIssueState(issueId: string, state: string): Promise<void> {
+    this.updateTaskState(issueId, state);
   }
 
   // --- File management (used by API) ---

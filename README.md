@@ -2,13 +2,11 @@
 
 A chaotic mess of agents doing their thing. Provider-agnostic agent orchestrator that polls for work, spins up isolated git worktrees, and runs any coding agent. Persistent state via SQLite. 5 runtime dependencies.
 
-Inspired by [OpenAI's Symphony](https://github.com/openai/symphony) but rebuilt from scratch in TypeScript with a different philosophy: any agent, any tracker, no lock-in.
-
 ## What it does
 
 Cacophony is a daemon you run **inside your project's git repo**:
 
-1. Watches for work (local files, GitHub Issues, Linear, or custom)
+1. Watches a local `tasks/` directory of markdown files for work (or a custom adapter)
 2. Creates a git worktree per task under `.cacophony/worktrees/` — each on its own branch
 3. Runs a coding agent in each worktree (Claude Code, Codex, Aider, or any CLI tool)
 4. Manages concurrency, retries, and lifecycle hooks
@@ -16,19 +14,6 @@ Cacophony is a daemon you run **inside your project's git repo**:
 6. Serves a web dashboard for managing tasks and monitoring agents
 
 You manage work. Cacophony manages agents.
-
-## How it differs from OpenAI's Symphony
-
-| | OpenAI Symphony | Cacophony |
-|---|---|---|
-| **Agents** | Codex only (JSON-RPC protocol) | Any CLI tool |
-| **Trackers** | Linear only | Local files + GitHub Issues + Linear + plugins |
-| **Isolation** | Separate clones | Git worktrees (shared `.git`) |
-| **State** | In-memory (lost on restart) | SQLite (persistent) |
-| **Retries** | Lost on crash | Restored from DB |
-| **Language** | Elixir | TypeScript |
-| **Runtime deps** | Elixir ecosystem | 5 npm packages |
-| **GUI** | None | Web dashboard |
 
 ## Install
 
@@ -45,29 +30,32 @@ Run from inside any git repository:
 
 ```bash
 cd my-project
-cacophony init            # generates WORKFLOW.md
-cacophony start --port 8080
+cacophony init            # generates .cacophony/config.md
+cacophony start           # dashboard on http://localhost:8080
 ```
 
-Open `http://localhost:8080` for the dashboard.
+Pass `--port N` to use a different port, or `--no-server` to run headless.
 
 Cacophony creates a `.cacophony/` directory inside your project for its state and worktrees — everything is scoped to that one repo.
 
 ```
 my-project/
 ├── .cacophony/              # state, auto-gitignored
+│   ├── config.md            # workflow + agent config (front matter + prompt)
 │   ├── cacophony.db
+│   ├── tasks/               # markdown task files
 │   └── worktrees/
-│       └── GH-42/           # git worktree on branch cacophony/GH-42
+│       └── fix-login/       # git worktree on branch cacophony/fix-login
 ├── .git/
-├── src/
-└── WORKFLOW.md              # config
+└── src/
 ```
+
+Cacophony's design rule: **finished code lives at the project root; everything in-progress, scratch, or local-only lives under `.cacophony/`**.
 
 ### Dev mode (no build step)
 
 ```bash
-npx tsx /path/to/cacophony/src/index.ts start WORKFLOW.md --port 8080
+npx tsx /path/to/cacophony/src/index.ts start --port 8080
 ```
 
 ## How worktrees work
@@ -83,19 +71,20 @@ When cacophony picks up an issue:
 
 The agent can commit, push, open PRs, and merge — it's a real branch in your repo.
 
-## File-based tracker (simplest setup)
+## File-based tracker
 
-No GitHub, no Linear, no API keys. Just markdown files in your project:
+Just markdown files inside `.cacophony/tasks/` — no API keys, no remote services:
 
 ```
 my-project/
-├── tasks/
-│   ├── fix-login-bug.md
-│   └── add-dark-mode.md
-└── WORKFLOW.md
+└── .cacophony/
+    ├── config.md
+    └── tasks/
+        ├── fix-login-bug.md
+        └── add-dark-mode.md
 ```
 
-Each task file has YAML front matter:
+Tasks are most easily created and edited from the web dashboard, but you can hand-edit the markdown files directly. Each file has YAML front matter:
 
 ```yaml
 ---
@@ -113,21 +102,16 @@ Drop a file in `tasks/` and cacophony picks it up. Or manage everything from the
 
 ## Configuration reference
 
-The `WORKFLOW.md` file uses YAML front matter for config and a Liquid template body for the agent prompt.
+The `.cacophony/config.md` file uses YAML front matter for config and a Liquid template body for the agent prompt. (Legacy `WORKFLOW.md` at the project root is still loaded as a fallback with a deprecation hint.)
 
-### `tracker`
+### `tracker` (optional)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `kind` | string | *required* | `"files"`, `"github"`, `"linear"`, or path to custom adapter |
-| `dir` | string | `"./tasks"` | Directory for task files. Used with `kind: files`. |
-| `repo` | string | | GitHub repo (`"owner/repo"`). Required for `github`. |
-| `api_key` | string | | Linear API key. Supports `$ENV_VAR` syntax. Required for `linear`. |
-| `project_slug` | string | | Linear project slug. Required for `linear`. |
-| `active_labels` | string[] | `["todo", "in-progress"]` | GitHub: labels that mark issues as active |
-| `active_states` | string[] | `["todo", "in progress"]` | States that mark issues as active (files + linear) |
-| `terminal_labels` | string[] | `["done", "wontfix"]` | GitHub: labels that mark issues as done |
-| `terminal_states` | string[] | `["done", "cancelled", ...]` | States that mark issues as done (files + linear) |
+| `kind` | string | `"files"` | `"files"` or path to a custom adapter |
+| `dir` | string | `".cacophony/tasks"` | Directory for task files (used by the files tracker) |
+| `active_states` | string[] | `["todo", "in-progress"]` | States that mark issues as active |
+| `terminal_states` | string[] | `["done", "cancelled", "wontfix"]` | States that mark issues as done |
 
 ### `agent`
 
@@ -179,13 +163,11 @@ hooks:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `port` | number | | Enable HTTP status server on this port |
+| `port` | number | `8080` | Dashboard / HTTP API port. Override with `--port N` or disable with `--no-server`. |
 
 ## Dependencies between tasks
 
-Tasks can declare blockers so agents run in the right order.
-
-**Files tracker** — use the `blocked_by` front matter field:
+Tasks can declare blockers so agents run in the right order. Use the `blocked_by` front matter field:
 
 ```yaml
 ---
@@ -196,29 +178,7 @@ blocked_by: [setup-database, create-user-model]
 # Add login endpoint
 ```
 
-**GitHub** — add `Blocked by #N` in the issue body:
-
-```
-Add login endpoint.
-
-Blocked by #12
-Blocked by #15
-```
-
-**Linear** — uses Linear's native "Blocked by" relations automatically.
-
 Cacophony skips any task whose blockers aren't in a terminal state.
-
-## The planner pattern
-
-For bigger features, create a single "plan" issue and let an agent decompose it into sub-issues automatically.
-
-1. Create an issue with a `plan` label describing the high-level feature
-2. Cacophony's planner prompt runs instead of the coding prompt
-3. The agent creates sub-issues using `gh issue create`, with proper `Blocked by` references
-4. Sub-issues execute in dependency order by subsequent agent runs
-
-The `cacophony init` wizard generates a `WORKFLOW.md` with both planner and coder prompts, branched on the `plan` label.
 
 ## Agent examples
 
@@ -274,12 +234,9 @@ export default function createTracker(config) {
       // Optional: return Issue[] in terminal states (for cleanup)
     },
 
-    async addLabel(issueId, label) {
-      // Optional: for auto-labeling running tasks
-    },
-
-    async removeLabel(issueId, label) {
-      // Optional
+    async setIssueState(issueId, state) {
+      // Optional: cacophony calls this to mark a task done after a successful run.
+      // If omitted, cacophony falls back to scheduling a continuation retry.
     },
   };
 }
@@ -294,20 +251,22 @@ tracker:
 
 ## Prompt template
 
-The body of `WORKFLOW.md` (below the front matter) is a [Liquid](https://liquidjs.com/) template. Available variables:
+The body of `.cacophony/config.md` (below the front matter) is a [Liquid](https://liquidjs.com/) template. Available variables:
 
 | Variable | Type | Description |
 |---|---|---|
 | `issue.id` | string | Tracker-internal ID |
-| `issue.identifier` | string | Human-readable key (`GH-42`, `fix-login`) |
+| `issue.identifier` | string | Human-readable key (e.g. `fix-login`) |
 | `issue.title` | string | Issue title |
 | `issue.description` | string | Issue body/description |
 | `issue.priority` | number or null | Priority (lower = higher) |
-| `issue.state` | string | Current state/label |
-| `issue.url` | string | Link to the issue |
+| `issue.state` | string | Current state |
+| `issue.url` | string or null | Link to the issue, if any |
 | `issue.labels` | string[] | All labels (lowercase) |
 | `attempt` | number or null | Retry attempt number (null on first run) |
-| `config` | object | Full WORKFLOW.md config (for referencing `{{config.tracker.repo}}` etc.) |
+| `config` | object | Full config from `.cacophony/config.md` |
+| `tasks_dir` | string | Absolute path to `.cacophony/tasks/` (used by agents that self-decompose) |
+| `project_root` | string | Absolute path to the project root |
 
 ## How it works
 
@@ -323,20 +282,10 @@ Every `polling.interval_ms`, cacophony:
 
 ### Retry behavior
 
-- **Agent succeeds (exit 0):** Schedule a 1-second continuation check. If the task is still active, dispatch again.
+- **Agent succeeds (exit 0):** Cacophony marks the task as `done` via the tracker's `setIssueState` method. (For custom trackers without `setIssueState`, falls back to a 1-second continuation retry.)
 - **Agent fails (non-zero exit):** Exponential backoff: 10s, 20s, 40s, 80s... up to `max_retry_backoff_ms`.
 - **Agent times out:** Kill and retry with backoff.
-- **3+ failures:** Cacophony adds a `failed` label (GitHub only) so you can triage.
 - **All retries are persisted to SQLite.** If cacophony crashes and restarts, pending retries are restored with corrected delays.
-
-### Auto-labeling
-
-For GitHub, cacophony automatically:
-
-- Creates standard labels (`todo`, `in-progress`, `plan`, `failed`) on startup if missing
-- Adds `in-progress` when dispatching an agent
-- Removes `in-progress` when the agent finishes
-- Adds `failed` after 3 retry attempts
 
 ### Worktree safety
 
@@ -367,7 +316,7 @@ The dashboard is a single-file Alpine.js app served from the daemon. Features:
 | `GET` | `/api/v1/status` | Orchestrator state (running, retrying, claimed, trackerKind) |
 | `GET` | `/api/v1/runs?limit=N` | Recent run history |
 | `GET` | `/api/v1/tasks` | All tasks (files tracker only) |
-| `POST` | `/api/v1/tasks` | Create task `{ identifier, priority, content }` |
+| `POST` | `/api/v1/tasks` | Create task `{ prompt, priority }` (identifier is auto-generated from the prompt) |
 | `PUT` | `/api/v1/tasks/:id/state` | Update task state `{ state }` |
 | `DELETE` | `/api/v1/tasks/:id` | Delete task |
 | `POST` | `/api/v1/stop/:id` | Cancel running agent |
@@ -376,7 +325,7 @@ The dashboard is a single-file Alpine.js app served from the daemon. Features:
 
 ```bash
 npm run dev              # Run with tsx (no build step)
-npm test                 # Run tests (119 tests)
+npm test                 # Run tests
 npm run test:watch       # TDD watch mode
 npm run test:coverage    # Coverage report
 npm run lint             # ESLint
@@ -390,7 +339,7 @@ npm run check            # Full pipeline: lint + format + test + build
 src/
   index.ts              CLI entry point (init/start/status/stop)
   orchestrator.ts       Poll loop, dispatch, reconciliation, blocker enforcement
-  config.ts             WORKFLOW.md parser, validator, hot-reload watcher
+  config.ts             Config file parser, validator, hot-reload watcher
   state.ts              SQLite store (runs, retries, issues, metrics)
   workspace.ts          Git worktree lifecycle, hooks, safety checks
   runner.ts             Agent subprocess management
@@ -401,8 +350,6 @@ src/
   trackers/
     interface.ts        TrackerAdapter interface, factory
     files.ts            Local markdown files (with blocked_by support)
-    github.ts           GitHub Issues via gh CLI (with Blocked by #N parsing)
-    linear.ts           Linear via native fetch + GraphQL
 ```
 
 ### Runtime dependencies
@@ -410,9 +357,9 @@ src/
 | Package | Purpose |
 |---|---|
 | `better-sqlite3` | Persistent state (runs, retries, metrics) |
-| `yaml` | Parse WORKFLOW.md front matter |
+| `yaml` | Parse config front matter |
 | `liquidjs` | Render prompt templates |
-| `chokidar` | Watch WORKFLOW.md for hot-reload |
+| `chokidar` | Watch the config file for hot-reload |
 | `chalk` | Terminal output formatting |
 
 Everything else uses Node.js builtins: `child_process`, `fs`, `path`, `http`, `crypto`.

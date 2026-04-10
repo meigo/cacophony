@@ -8,10 +8,10 @@ describe('loadWorkflow', () => {
   it('parses valid workflow with full config', () => {
     const wf = loadWorkflow(fixturePath('valid-workflow.md'));
 
-    expect(wf.config.tracker.kind).toBe('github');
-    expect(wf.config.tracker.repo).toBe('test-org/test-repo');
-    expect(wf.config.tracker.activeLabels).toEqual(['todo', 'in-progress']);
-    expect(wf.config.tracker.terminalLabels).toEqual(['done', 'wontfix']);
+    expect(wf.config.tracker.kind).toBe('files');
+    expect(wf.config.tracker.dir).toContain('tasks');
+    expect(wf.config.tracker.activeStates).toEqual(['todo', 'in-progress']);
+    expect(wf.config.tracker.terminalStates).toEqual(['done', 'wontfix']);
     expect(wf.config.agent.command).toBe('echo {{prompt_file}}');
     expect(wf.config.agent.promptDelivery).toBe('file');
     expect(wf.config.agent.timeoutMs).toBe(5000);
@@ -28,7 +28,7 @@ describe('loadWorkflow', () => {
   it('parses minimal workflow with defaults', () => {
     const wf = loadWorkflow(fixturePath('minimal-workflow.md'));
 
-    expect(wf.config.tracker.kind).toBe('github');
+    expect(wf.config.tracker.kind).toBe('files');
     expect(wf.config.agent.timeoutMs).toBe(3_600_000);
     expect(wf.config.agent.maxConcurrent).toBe(5);
     expect(wf.config.agent.maxTurns).toBe(20);
@@ -41,7 +41,7 @@ describe('loadWorkflow', () => {
   it('handles files with no front matter', () => {
     const wf = loadWorkflow(fixturePath('no-frontmatter.md'));
 
-    expect(wf.config.tracker.kind).toBe('');
+    expect(wf.config.tracker.kind).toBe('files');
     expect(wf.promptTemplate).toContain('Just a plain prompt');
   });
 
@@ -53,18 +53,17 @@ describe('loadWorkflow', () => {
     expect(() => loadWorkflow('/nonexistent/path/workflow.md')).toThrow();
   });
 
-  it('resolves $VAR environment variables', () => {
+  it('normalizes state arrays to lowercase', () => {
     const dir = tmpDir();
-    process.env.TEST_CACOPHONY_KEY = 'secret-key-123';
-
     const wfPath = writeFile(
       dir,
       'wf.md',
       `---
 tracker:
-  kind: linear
-  api_key: "$TEST_CACOPHONY_KEY"
-  project_slug: "test"
+  kind: files
+  dir: "./tasks"
+  active_states: ["TODO", "In-Progress"]
+  terminal_states: ["DONE", "WontFix"]
 agent:
   command: "echo test"
 ---
@@ -72,69 +71,23 @@ Hello`,
     );
 
     const wf = loadWorkflow(wfPath);
-    expect(wf.config.tracker.apiKey).toBe('secret-key-123');
-
-    delete process.env.TEST_CACOPHONY_KEY;
-    cleanup(dir);
-  });
-
-  it('normalizes state/label arrays to lowercase', () => {
-    const dir = tmpDir();
-    const wfPath = writeFile(
-      dir,
-      'wf.md',
-      `---
-tracker:
-  kind: github
-  repo: "org/repo"
-  active_labels: ["TODO", "In-Progress"]
-  terminal_labels: ["DONE", "WontFix"]
-agent:
-  command: "echo test"
----
-Hello`,
-    );
-
-    const wf = loadWorkflow(wfPath);
-    expect(wf.config.tracker.activeLabels).toEqual(['todo', 'in-progress']);
-    expect(wf.config.tracker.terminalLabels).toEqual(['done', 'wontfix']);
+    expect(wf.config.tracker.activeStates).toEqual(['todo', 'in-progress']);
+    expect(wf.config.tracker.terminalStates).toEqual(['done', 'wontfix']);
 
     cleanup(dir);
   });
 });
 
 describe('validateConfig', () => {
-  it('returns no errors for valid github config', () => {
+  it('returns no errors for valid files config', () => {
     const wf = loadWorkflow(fixturePath('valid-workflow.md'));
     const errors = validateConfig(wf.config);
     expect(errors).toEqual([]);
   });
 
-  it('requires tracker.kind', () => {
+  it('defaults tracker.kind to files when omitted', () => {
     const wf = loadWorkflow(fixturePath('no-frontmatter.md'));
-    const errors = validateConfig(wf.config);
-    expect(errors).toContain('tracker.kind is required');
-  });
-
-  it('requires tracker.repo for github', () => {
-    const dir = tmpDir();
-    const wfPath = writeFile(
-      dir,
-      'wf.md',
-      `---
-tracker:
-  kind: github
-agent:
-  command: "echo test"
----
-Hello`,
-    );
-
-    const wf = loadWorkflow(wfPath);
-    const errors = validateConfig(wf.config);
-    expect(errors).toContain('tracker.repo is required for GitHub tracker');
-
-    cleanup(dir);
+    expect(wf.config.tracker.kind).toBe('files');
   });
 
   it('requires agent.command', () => {
@@ -144,8 +97,8 @@ Hello`,
       'wf.md',
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 ---
 Hello`,
     );
@@ -153,28 +106,6 @@ Hello`,
     const wf = loadWorkflow(wfPath);
     const errors = validateConfig(wf.config);
     expect(errors).toContain('agent.command is required');
-
-    cleanup(dir);
-  });
-
-  it('requires linear api_key and project_slug', () => {
-    const dir = tmpDir();
-    const wfPath = writeFile(
-      dir,
-      'wf.md',
-      `---
-tracker:
-  kind: linear
-agent:
-  command: "echo test"
----
-Hello`,
-    );
-
-    const wf = loadWorkflow(wfPath);
-    const errors = validateConfig(wf.config);
-    expect(errors).toContain('tracker.api_key is required for Linear tracker');
-    expect(errors).toContain('tracker.project_slug is required for Linear tracker');
 
     cleanup(dir);
   });
@@ -198,7 +129,7 @@ describe('ConfigManager', () => {
     const mgr = new ConfigManager(wfPath, logger);
     const wf = mgr.load();
 
-    expect(wf.config.tracker.kind).toBe('github');
+    expect(wf.config.tracker.kind).toBe('files');
   });
 
   it('throws on load of invalid config', () => {
@@ -206,8 +137,8 @@ describe('ConfigManager', () => {
       dir,
       'bad.md',
       `---
-agent:
-  command: "echo"
+tracker:
+  dir: "./tasks"
 ---
 Hello`,
     );
@@ -228,8 +159,8 @@ Hello`,
       'wf.md',
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 agent:
   command: "echo v1"
 ---
@@ -246,8 +177,8 @@ Hello v1`,
       wfPath,
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 agent:
   command: "echo v2"
 ---
@@ -265,8 +196,8 @@ Hello v2`,
       'wf.md',
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 agent:
   command: "echo v1"
 ---
@@ -290,8 +221,8 @@ Hello`,
       'wf.md',
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 agent:
   command: "echo v1"
 ---
@@ -310,8 +241,8 @@ Hello`,
       wfPath,
       `---
 tracker:
-  kind: github
-  repo: "org/repo"
+  kind: files
+  dir: "./tasks"
 agent:
   command: "echo v2"
 ---

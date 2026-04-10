@@ -28,14 +28,39 @@ function findGitRoot(startDir: string): string {
   }
 }
 
-function detectBaseBranch(projectRoot: string): string {
-  // Try origin/HEAD first, fall back to main, then master
+function ensureInitialCommit(projectRoot: string, logger: Logger): void {
   try {
-    const out = execFileSync(
-      'git',
-      ['symbolic-ref', 'refs/remotes/origin/HEAD', '--short'],
-      { cwd: projectRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+    execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: projectRoot,
+      stdio: 'ignore',
+    });
+    return;
+  } catch {
+    // No commits — bootstrap one
+  }
+
+  try {
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'cacophony: initial commit'], {
+      cwd: projectRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    logger.info('Created initial empty commit (repo had no history)');
+  } catch (e) {
+    throw new Error(
+      `The git repository has no commits and cacophony could not create an initial one. ` +
+        `Check that git user.name and user.email are configured, then retry. (${e})`,
     );
+  }
+}
+
+function detectBaseBranch(projectRoot: string): string {
+  // Try origin/HEAD first
+  try {
+    const out = execFileSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', '--short'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
     return out.trim().replace(/^origin\//, '');
   } catch {
     // Try main, then master
@@ -50,7 +75,19 @@ function detectBaseBranch(projectRoot: string): string {
         // Try next
       }
     }
-    return 'main';
+    // Fall back to whatever branch HEAD currently points at
+    try {
+      const out = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], {
+        cwd: projectRoot,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return out.trim();
+    } catch {
+      throw new Error(
+        'Could not determine the base branch. Set workspace.base_branch in .cacophony/config.md.',
+      );
+    }
   }
 }
 
@@ -64,9 +101,10 @@ export class WorkspaceManager {
   constructor(projectRoot: string, hooks: HooksConfig, logger: Logger, baseBranch?: string) {
     this.projectRoot = findGitRoot(projectRoot);
     this.worktreeRoot = path.join(this.projectRoot, '.cacophony', 'worktrees');
+    this.logger = logger;
+    ensureInitialCommit(this.projectRoot, logger);
     this.baseBranch = baseBranch || detectBaseBranch(this.projectRoot);
     this.hooks = hooks;
-    this.logger = logger;
     fs.mkdirSync(this.worktreeRoot, { recursive: true });
 
     // Auto-gitignore the .cacophony directory
@@ -237,8 +275,38 @@ export class WorkspaceManager {
     await this.removeWorktree(wsPath, branchName);
   }
 
-  private async removeWorktree(wsPath: string, branchName: string): Promise<void> {
-    // Remove the git worktree
+  private commitDirtyWorktree(wsPath: string): void {
+    if (!fs.existsSync(wsPath)) return;
+    let dirty: string;
+    try {
+      dirty = execFileSync('git', ['status', '--porcelain'], {
+        cwd: wsPath,
+        encoding: 'utf-8',
+      });
+    } catch {
+      return;
+    }
+    if (dirty.trim() === '') return;
+    try {
+      execFileSync('git', ['add', '-A'], { cwd: wsPath, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'cacophony: auto-commit before worktree cleanup'], {
+        cwd: wsPath,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      this.logger.info('Auto-committed uncommitted agent work', { path: wsPath });
+    } catch (e) {
+      this.logger.warn('Failed to auto-commit dirty worktree', {
+        path: wsPath,
+        error: String(e),
+      });
+    }
+  }
+
+  private async removeWorktree(wsPath: string, _branchName: string): Promise<void> {
+    // Preserve any work the agent forgot to commit. The cacophony/<id> branch
+    // is the durable record of the run; the worktree dir is just scratch space.
+    this.commitDirtyWorktree(wsPath);
+
     try {
       execFileSync('git', ['worktree', 'remove', '--force', wsPath], {
         cwd: this.projectRoot,
@@ -255,15 +323,8 @@ export class WorkspaceManager {
       }
     }
 
-    // Delete the branch (only if not checked out)
-    try {
-      execFileSync('git', ['branch', '-D', branchName], {
-        cwd: this.projectRoot,
-        stdio: 'ignore',
-      });
-    } catch {
-      // Branch may have been pushed/merged and deleted — that's fine
-    }
+    // The branch is intentionally left in place — it preserves the agent's work
+    // and lets the user inspect, merge, or delete it manually.
   }
 
   async cleanTerminalWorkspaces(identifiers: string[]): Promise<void> {

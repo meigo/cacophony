@@ -1,7 +1,7 @@
 ---
 tracker:
-  kind: github
-  repo: 'test-org/test-repo'
+  kind: files
+  dir: './tasks'
 
 agent:
   command: 'echo test'

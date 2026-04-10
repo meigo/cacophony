@@ -310,8 +310,8 @@ export function dashboardHtml(): string {
   <!-- Create task (files tracker only) -->
   <div class="creator" x-show="trackerKind === 'files'">
     <form @submit.prevent="createTask()">
+      <textarea x-model="newTask.prompt" placeholder="Describe what needs to be done..." required rows="3"></textarea>
       <div class="creator-row">
-        <input type="text" x-model="newTask.identifier" placeholder="task-id (e.g., fix-login-bug)" required>
         <select x-model="newTask.priority">
           <option value="">No priority</option>
           <option value="1">P1 (urgent)</option>
@@ -319,17 +319,9 @@ export function dashboardHtml(): string {
           <option value="3">P3 (normal)</option>
           <option value="4">P4 (low)</option>
         </select>
-        <button type="button" class="btn" @click="showDesc = !showDesc" x-text="showDesc ? 'Hide' : 'Add description'"></button>
         <button type="submit" class="btn primary">Create</button>
       </div>
-      <textarea x-show="showDesc" x-model="newTask.content" placeholder="# Task title&#10;&#10;Longer description and acceptance criteria..."></textarea>
     </form>
-  </div>
-
-  <!-- Empty tracker hint (GitHub/Linear) -->
-  <div class="empty" x-show="trackerKind && trackerKind !== 'files'" style="margin-bottom: 1.5rem;">
-    <strong>Using the <span x-text="trackerKind"></span> tracker</strong>
-    Create and manage issues in <span x-text="trackerKind"></span>. Cacophony reads them here.
   </div>
 
   <!-- Filter tabs -->
@@ -454,12 +446,13 @@ function app() {
     running: [],
     retrying: [],
     trackerKind: '',
+    activeStates: ['todo','in-progress'],
+    terminalStates: ['done','cancelled','wontfix'],
     connected: false,
     filter: 'active',
     search: '',
     selected: null,
-    showDesc: false,
-    newTask: { identifier: '', priority: '', content: '' },
+    newTask: { prompt: '', priority: '' },
     _tick: 0,  // force re-render for elapsed time
 
     async init() {
@@ -483,6 +476,8 @@ function app() {
         ]);
         this.status = status;
         this.trackerKind = status.trackerKind || '';
+        if (status.activeStates?.length) this.activeStates = status.activeStates;
+        if (status.terminalStates?.length) this.terminalStates = status.terminalStates;
         this.running = status.running || [];
         this.retrying = status.retrying || [];
         this.tasks = tasks;
@@ -503,7 +498,7 @@ function app() {
     get filteredTasks() {
       const term = this.search.toLowerCase().trim();
       let list = this.tasks;
-      if (this.filter === 'active') list = list.filter(t => ['todo','in-progress'].includes(t.state));
+      if (this.filter === 'active') list = list.filter(t => this.activeStates.includes(t.state));
       else if (this.filter === 'done') list = list.filter(t => this.isDone(t));
       if (term) list = list.filter(t =>
         (t.title || '').toLowerCase().includes(term) ||
@@ -525,7 +520,7 @@ function app() {
     },
     get counts() {
       return {
-        active: this.tasks.filter(t => ['todo','in-progress'].includes(t.state)).length,
+        active: this.tasks.filter(t => this.activeStates.includes(t.state)).length,
         done: this.tasks.filter(t => this.isDone(t)).length,
         all: this.tasks.length,
       };
@@ -563,7 +558,7 @@ function app() {
     },
 
     // --- helpers ---
-    isDone(t) { return ['done','cancelled','wontfix'].includes(t.state); },
+    isDone(t) { return this.terminalStates.includes(t.state); },
     isRunning(t) {
       return this.running.some(r => r.identifier === t.identifier || r.issueId === t.id);
     },
@@ -609,18 +604,17 @@ function app() {
     },
 
     async createTask() {
-      if (!this.newTask.identifier) return;
+      const prompt = (this.newTask.prompt || '').trim();
+      if (!prompt) return;
       const body = {
-        identifier: this.newTask.identifier.trim(),
+        prompt,
         priority: this.newTask.priority ? Number(this.newTask.priority) : null,
-        content: (this.newTask.content || ('# ' + this.newTask.identifier)).trim(),
       };
       await this.fetch('/api/v1/tasks', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify(body),
       });
-      this.newTask = { identifier: '', priority: '', content: '' };
-      this.showDesc = false;
+      this.newTask = { prompt: '', priority: '' };
       await this.refresh();
     },
 
