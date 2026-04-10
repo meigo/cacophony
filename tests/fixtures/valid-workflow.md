@@ -13,7 +13,7 @@ agent:
   max_turns: 5
 
 workspace:
-  root: ./test-workspaces
+  project_root: ./test-project
 
 hooks:
   after_create: 'echo workspace created'

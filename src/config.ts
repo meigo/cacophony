@@ -24,7 +24,7 @@ const DEFAULTS = {
     maxTurns: 20,
     maxRetryBackoffMs: 300_000,
   },
-  workspace: { root: path.join(os.tmpdir(), 'cacophony_workspaces') },
+  workspace: { projectRoot: '.' },
   hooks: { timeoutMs: 60_000 },
   tracker: {
     activeStates: ['todo', 'in progress'],
@@ -116,7 +116,8 @@ function buildConfig(fm: Record<string, unknown>): WorkflowConfig {
   };
 
   const workspace: WorkspaceConfig = {
-    root: expandPath(String(w.root ?? DEFAULTS.workspace.root)),
+    projectRoot: expandPath(String(w.project_root ?? DEFAULTS.workspace.projectRoot)),
+    baseBranch: w.base_branch != null ? String(w.base_branch) : undefined,
   };
 
   const hooks: HooksConfig = {

@@ -36,7 +36,18 @@ export class Orchestrator {
 
     // Create components
     this.tracker = await createTracker(config.tracker);
-    this.workspace = new WorkspaceManager(config.workspace.root, config.hooks, this.logger);
+    if (this.tracker.init) {
+      await this.tracker.init().catch((e) => {
+        this.logger.warn('Tracker init failed', { error: String(e) });
+      });
+    }
+    this.workspace = new WorkspaceManager(
+      config.workspace.projectRoot,
+      config.hooks,
+      this.logger,
+      config.workspace.baseBranch,
+    );
+    this.workspace.pruneStale();
     this.runner = new AgentRunner(config.agent, this.logger);
     this.retryEngine = new RetryEngine(
       this.store,
@@ -307,6 +318,11 @@ export class Orchestrator {
         config: wf.config,
       }) as string;
 
+      // Auto-label: add in-progress
+      if (this.tracker.addLabel) {
+        await this.tracker.addLabel(issue.id, 'in-progress').catch(() => {});
+      }
+
       // Create DB record
       const runId = this.store.createRun(issue.id, issue.identifier, attempt, ws.path);
       this.store.updateRunStatus(runId, 'running');
@@ -362,6 +378,11 @@ export class Orchestrator {
       // After-run hook (best-effort)
       await this.workspace.runHook('afterRun', ws.path).catch(() => {});
 
+      // Always remove in-progress label on completion
+      if (this.tracker.removeLabel) {
+        await this.tracker.removeLabel(issue.id, 'in-progress').catch(() => {});
+      }
+
       if (result.timedOut) {
         this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out');
         log.warn('Agent timed out', { durationMs: result.durationMs });
@@ -375,6 +396,12 @@ export class Orchestrator {
         const errMsg = result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
         this.store.finishRun(runId, 'failed', result.exitCode, errMsg);
         log.warn('Agent failed', { exitCode: result.exitCode, durationMs: result.durationMs });
+
+        // Add failed label after 3 attempts
+        if (attempt + 1 >= 3 && this.tracker.addLabel) {
+          await this.tracker.addLabel(issue.id, 'failed').catch(() => {});
+        }
+
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
       }
     } catch (e) {
@@ -397,9 +424,10 @@ export class Orchestrator {
       const issue = candidates.find((c) => c.id === issueId);
 
       if (!issue) {
-        // Issue no longer in active candidates — release claim
+        // Issue no longer in active candidates — release claim and clean workspace
         this.claimed.delete(issueId);
-        log.info('Retry: issue no longer active, releasing claim');
+        log.info('Retry: issue no longer active, releasing claim and cleaning workspace');
+        await this.workspace.removeWorkspace(entry.identifier);
         return;
       }
 

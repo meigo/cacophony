@@ -25,9 +25,12 @@ export interface BlockerRef {
 
 export interface TrackerAdapter {
   kind: string;
+  init?(): Promise<void>;
   fetchCandidates(): Promise<Issue[]>;
   fetchIssueStatesByIds(ids: string[]): Promise<Pick<Issue, 'id' | 'identifier' | 'state'>[]>;
   fetchTerminalIssues?(): Promise<Issue[]>;
+  addLabel?(issueId: string, label: string): Promise<void>;
+  removeLabel?(issueId: string, label: string): Promise<void>;
 }
 
 // === Workflow / Config ===
@@ -71,7 +74,8 @@ export interface AgentConfig {
 }
 
 export interface WorkspaceConfig {
-  root: string;
+  projectRoot: string;   // defaults to directory containing WORKFLOW.md
+  baseBranch?: string;   // defaults to auto-detected (origin/HEAD or main)
 }
 
 export interface HooksConfig {

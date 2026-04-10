@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { HooksConfig } from '../src/types.js';
 import { WorkspaceManager } from '../src/workspace.js';
 import { Logger } from '../src/logger.js';
-import { tmpDir, cleanup } from './helpers.js';
+import { tmpGitRepo, cleanup } from './helpers.js';
 
 describe('WorkspaceManager', () => {
   let dir: string;
@@ -12,7 +12,7 @@ describe('WorkspaceManager', () => {
   const defaultHooks: HooksConfig = { timeoutMs: 5000 };
 
   beforeEach(() => {
-    dir = tmpDir();
+    dir = tmpGitRepo();
     logger = new Logger();
   });
 
@@ -86,15 +86,16 @@ describe('WorkspaceManager', () => {
       const mgr = new WorkspaceManager(dir, hooks, logger);
 
       await expect(mgr.ensureWorkspace('GH-fail')).rejects.toThrow('after_create hook failed');
-      expect(fs.existsSync(path.join(dir, 'GH-fail'))).toBe(false);
+      expect(fs.existsSync(mgr.getWorkspacePath('GH-fail'))).toBe(false);
     });
 
     it('prevents path traversal', async () => {
       const mgr = new WorkspaceManager(dir, defaultHooks, logger);
       // The sanitizer replaces .. with __ so this becomes safe
       const result = await mgr.ensureWorkspace('..\\..\\etc\\passwd');
-      // Should be sanitized and under root
-      expect(path.resolve(result.path).startsWith(path.resolve(dir))).toBe(true);
+      // Should be sanitized and under the worktree root
+      const worktreeRoot = path.join(dir, '.cacophony', 'worktrees');
+      expect(path.resolve(result.path).startsWith(path.resolve(worktreeRoot))).toBe(true);
     });
   });
 
@@ -179,7 +180,7 @@ describe('WorkspaceManager', () => {
       const p1 = mgr.getWorkspacePath('GH-42');
       const p2 = mgr.getWorkspacePath('GH-42');
       expect(p1).toBe(p2);
-      expect(p1).toBe(path.join(dir, 'GH-42'));
+      expect(p1).toBe(path.join(dir, '.cacophony', 'worktrees', 'GH-42'));
     });
   });
 });

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import type { Issue } from '../src/types.js';
 
 export function tmpDir(prefix = 'cacophony-test-'): string {
@@ -38,6 +39,24 @@ export function makeIssue(overrides: Partial<Issue> = {}): Issue {
     updatedAt: new Date('2026-01-01'),
     ...overrides,
   };
+}
+
+/**
+ * Initialize a git repo in a temp directory with one commit on main.
+ * Returns the absolute path to the repo.
+ */
+export function tmpGitRepo(prefix = 'cacophony-test-repo-'): string {
+  const dir = tmpDir(prefix);
+  const run = (args: string[]) =>
+    execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@example.com']);
+  run(['config', 'user.name', 'Test User']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# test\n', 'utf-8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'initial']);
+  return dir;
 }
 
 export function fixturesDir(): string {

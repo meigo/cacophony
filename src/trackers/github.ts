@@ -184,6 +184,50 @@ export class GitHubTracker implements TrackerAdapter {
     }
   }
 
+  async init(): Promise<void> {
+    // Ensure standard labels exist
+    const labels: Array<{ name: string; color: string; description: string }> = [
+      { name: 'todo', color: '0E8A16', description: 'Ready for agent' },
+      { name: 'in-progress', color: 'FBCA04', description: 'Agent is working on this' },
+      { name: 'plan', color: '7057FF', description: 'Planner should decompose this' },
+      { name: 'failed', color: 'B60205', description: 'Failed after multiple retries' },
+    ];
+
+    for (const label of labels) {
+      try {
+        execGh([
+          'label',
+          'create',
+          label.name,
+          '--repo',
+          this.repo,
+          '--color',
+          label.color,
+          '--description',
+          label.description,
+        ]);
+      } catch {
+        // Label already exists — ignore
+      }
+    }
+  }
+
+  async addLabel(issueId: string, label: string): Promise<void> {
+    try {
+      execGh(['issue', 'edit', issueId, '--repo', this.repo, '--add-label', label]);
+    } catch {
+      // Label may already exist or issue closed — non-fatal
+    }
+  }
+
+  async removeLabel(issueId: string, label: string): Promise<void> {
+    try {
+      execGh(['issue', 'edit', issueId, '--repo', this.repo, '--remove-label', label]);
+    } catch {
+      // Label may already be removed — non-fatal
+    }
+  }
+
   private async resolveBlockers(issues: Issue[]): Promise<void> {
     // Collect all unique blocker numbers across all issues
     const allBlockerNumbers = new Set<number>();

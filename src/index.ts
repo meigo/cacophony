@@ -70,9 +70,11 @@ function getFlag(args: string[], flag: string): string | undefined {
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
-function resolveDbPath(workspaceRoot: string): string {
-  fs.mkdirSync(workspaceRoot, { recursive: true });
-  return path.join(workspaceRoot, '.cacophony.db');
+function resolveDbPath(projectRoot: string): string {
+  const resolvedRoot = path.resolve(projectRoot);
+  const cacoDir = path.join(resolvedRoot, '.cacophony');
+  fs.mkdirSync(cacoDir, { recursive: true });
+  return path.join(cacoDir, 'cacophony.db');
 }
 
 // --- Init ---
@@ -233,47 +235,7 @@ async function cmdInit(): Promise<void> {
     agentDelivery = deliveryChoice;
   }
 
-  const maxConcurrent = await ask(rl, 'Max concurrent agents', '5');
-
-  // --- Workspace ---
-  const workspaceRoot = await ask(rl, 'Workspace root directory', './workspaces');
-
-  // --- Hooks ---
-  let cloneUrl = '';
-  if (trackerChoice === 'GitHub Issues') {
-    // Try to get clone URL
-    try {
-      const { execFileSync } = await import('node:child_process');
-      cloneUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
-        encoding: 'utf-8',
-        timeout: 5000,
-      }).trim();
-    } catch {
-      // ignore
-    }
-  }
-
-  const useGitHooks = trackerChoice === 'GitHub Issues' || trackerChoice === 'Linear';
-  let hooksBlock = '';
-
-  if (useGitHooks && cloneUrl) {
-    hooksBlock = `
-hooks:
-  after_create: |
-    git clone ${cloneUrl} .
-  before_run: |
-    git checkout main && git pull origin main`;
-  } else if (useGitHooks) {
-    const repoUrl = await ask(rl, 'Git clone URL for workspaces (or leave blank to skip)');
-    if (repoUrl) {
-      hooksBlock = `
-hooks:
-  after_create: |
-    git clone ${repoUrl} .
-  before_run: |
-    git checkout main && git pull origin main`;
-    }
-  }
+  const maxConcurrent = await ask(rl, 'Max concurrent agents', '3');
 
   rl.close();
 
@@ -286,16 +248,15 @@ agent:
   prompt_delivery: ${agentDelivery}
   timeout_ms: 3600000
   max_concurrent: ${maxConcurrent}
-${hooksBlock}
-
-workspace:
-  root: ${workspaceRoot}
+  max_turns: 50
 
 polling:
   interval_ms: 30000
 ---
 
 You are an autonomous coding agent working on issue **{{issue.identifier}}**.
+
+You are running inside a git worktree at the project root. A new branch has already been created for you.
 
 ## Task
 
@@ -305,14 +266,15 @@ You are an autonomous coding agent working on issue **{{issue.identifier}}**.
 
 ## Instructions
 
-1. Create a feature branch named \`{{issue.identifier | downcase}}\`
-2. Implement the required changes
-3. Write or update tests as needed
-4. Ensure all tests pass
-5. Open a pull request with a clear description
+1. Implement the required changes in this worktree
+2. Inspect the project stack and run appropriate tests (unit, lint, type check)
+3. Fix any failures — do not move on until everything passes
+4. Commit and push your branch
+5. Open a pull request and merge it: \`gh pr merge --squash --delete-branch\`
+6. Close this issue when done
 
 {% if attempt %}
-This is retry attempt #{{attempt}}. Check the previous work in this workspace and continue from where it left off.
+This is retry attempt #{{attempt}}. The worktree may contain previous work — continue from where it left off.
 {% endif %}
 `;
 
@@ -337,7 +299,7 @@ async function cmdStart(args: string[]): Promise<void> {
   const wf = configManager.load();
   const config = wf.config;
 
-  const dbPath = resolveDbPath(config.workspace.root);
+  const dbPath = resolveDbPath(config.workspace.projectRoot);
   const store = new StateStore(dbPath);
 
   logger.info(`Database at ${dbPath}`);
@@ -364,16 +326,16 @@ async function cmdStart(args: string[]): Promise<void> {
   // Keep process alive
   setInterval(() => {
     // Check for stop sentinel files
-    const root = config.workspace.root;
+    const sentinelDir = path.join(path.resolve(config.workspace.projectRoot), '.cacophony');
     try {
-      const files = fs.readdirSync(root);
+      const files = fs.readdirSync(sentinelDir);
       for (const f of files) {
-        if (f.startsWith('.cacophony-stop-')) {
-          const identifier = f.replace('.cacophony-stop-', '');
+        if (f.startsWith('stop-')) {
+          const identifier = f.replace('stop-', '');
           if (orchestrator.cancelIssue(identifier)) {
             logger.info(`Canceled ${identifier} via sentinel file`);
           }
-          fs.unlinkSync(path.join(root, f));
+          fs.unlinkSync(path.join(sentinelDir, f));
         }
       }
     } catch {
@@ -389,7 +351,7 @@ async function cmdStatus(args: string[]): Promise<void> {
   try {
     const configManager = new ConfigManager(workflowPath, logger);
     const wf = configManager.load();
-    const dbPath = resolveDbPath(wf.config.workspace.root);
+    const dbPath = resolveDbPath(wf.config.workspace.projectRoot);
 
     if (!fs.existsSync(dbPath)) {
       console.log(chalk.yellow('No database found. Is cacophony running?'));
@@ -456,11 +418,10 @@ async function cmdStop(args: string[]): Promise<void> {
   try {
     const configManager = new ConfigManager(workflowPath, logger);
     const wf = configManager.load();
-    const root = wf.config.workspace.root;
-
-    // Write sentinel file for the running daemon to pick up
-    const sentinelPath = path.join(root, `.cacophony-stop-${identifier}`);
-    fs.mkdirSync(root, { recursive: true });
+    const projectRoot = path.resolve(wf.config.workspace.projectRoot);
+    const sentinelDir = path.join(projectRoot, '.cacophony');
+    const sentinelPath = path.join(sentinelDir, `stop-${identifier}`);
+    fs.mkdirSync(sentinelDir, { recursive: true });
     fs.writeFileSync(sentinelPath, '', 'utf-8');
 
     console.log(chalk.green(`Stop signal sent for ${identifier}`));

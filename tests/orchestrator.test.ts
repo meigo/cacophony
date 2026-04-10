@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
-import fs from 'node:fs';
 import { Orchestrator } from '../src/orchestrator.js';
 import { ConfigManager } from '../src/config.js';
 import { StateStore } from '../src/state.js';
 import { Logger } from '../src/logger.js';
-import { tmpDir, cleanup, writeFile } from './helpers.js';
+import { tmpGitRepo, cleanup, writeFile } from './helpers.js';
 
 function createWorkflow(dir: string, overrides: { agentCommand?: string } = {}): string {
   const agentCmd = overrides.agentCommand ?? 'echo done';
-  const wsRoot = path.join(dir, 'workspaces').replace(/\\/g, '/');
+  const projectRoot = dir.replace(/\\/g, '/');
   return writeFile(
     dir,
     'WORKFLOW.md',
@@ -27,7 +26,7 @@ agent:
   max_concurrent: 3
 
 workspace:
-  root: ${wsRoot}
+  project_root: ${projectRoot}
 
 polling:
   interval_ms: 60000
@@ -38,12 +37,16 @@ Work on {{issue.title}}
   );
 }
 
+function dbPathFor(projectRoot: string): string {
+  return path.join(projectRoot, '.cacophony', 'cacophony.db');
+}
+
 describe('Orchestrator', () => {
   let dir: string;
   let logger: Logger;
 
   beforeEach(() => {
-    dir = tmpDir();
+    dir = tmpGitRepo();
     logger = new Logger();
   });
 
@@ -56,10 +59,12 @@ describe('Orchestrator', () => {
       const wfPath = createWorkflow(dir);
       const configMgr = new ConfigManager(wfPath, logger);
       configMgr.load();
-      const wsRoot = configMgr.getCurrent().config.workspace.root;
-      fs.mkdirSync(wsRoot, { recursive: true });
 
-      const dbPath = path.join(wsRoot, '.cacophony.db');
+      const dbPath = dbPathFor(dir);
+      // Ensure .cacophony dir exists
+      const fs = await import('node:fs');
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
       const store = new StateStore(dbPath);
 
       // Simulate stale run from previous process
@@ -86,13 +91,15 @@ describe('Orchestrator', () => {
   });
 
   describe('getStatus', () => {
-    it('returns empty state before start', () => {
+    it('returns empty state before start', async () => {
       const wfPath = createWorkflow(dir);
       const configMgr = new ConfigManager(wfPath, logger);
       configMgr.load();
-      const wsRoot = configMgr.getCurrent().config.workspace.root;
-      fs.mkdirSync(wsRoot, { recursive: true });
-      const store = new StateStore(path.join(wsRoot, '.cacophony.db'));
+
+      const fs = await import('node:fs');
+      const dbPath = dbPathFor(dir);
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const store = new StateStore(dbPath);
 
       const orchestrator = new Orchestrator(configMgr, store, logger);
       const status = orchestrator.getStatus();
@@ -106,13 +113,15 @@ describe('Orchestrator', () => {
   });
 
   describe('cancelIssue', () => {
-    it('returns false for unknown issue', () => {
+    it('returns false for unknown issue', async () => {
       const wfPath = createWorkflow(dir);
       const configMgr = new ConfigManager(wfPath, logger);
       configMgr.load();
-      const wsRoot = configMgr.getCurrent().config.workspace.root;
-      fs.mkdirSync(wsRoot, { recursive: true });
-      const store = new StateStore(path.join(wsRoot, '.cacophony.db'));
+
+      const fs = await import('node:fs');
+      const dbPath = dbPathFor(dir);
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const store = new StateStore(dbPath);
 
       const orchestrator = new Orchestrator(configMgr, store, logger);
       expect(orchestrator.cancelIssue('GH-999')).toBe(false);
@@ -126,9 +135,11 @@ describe('Orchestrator', () => {
       const wfPath = createWorkflow(dir);
       const configMgr = new ConfigManager(wfPath, logger);
       configMgr.load();
-      const wsRoot = configMgr.getCurrent().config.workspace.root;
-      fs.mkdirSync(wsRoot, { recursive: true });
-      const store = new StateStore(path.join(wsRoot, '.cacophony.db'));
+
+      const fs = await import('node:fs');
+      const dbPath = dbPathFor(dir);
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const store = new StateStore(dbPath);
 
       const orchestrator = new Orchestrator(configMgr, store, logger);
       await orchestrator.start();

@@ -17,7 +17,7 @@ describe('loadWorkflow', () => {
     expect(wf.config.agent.timeoutMs).toBe(5000);
     expect(wf.config.agent.maxConcurrent).toBe(3);
     expect(wf.config.agent.maxTurns).toBe(5);
-    expect(wf.config.workspace.root).toBe('./test-workspaces');
+    expect(wf.config.workspace.projectRoot).toBe('./test-project');
     expect(wf.config.hooks.afterCreate).toBe('echo workspace created');
     expect(wf.config.hooks.beforeRun).toBe('echo before run');
     expect(wf.config.polling.intervalMs).toBe(1000);
