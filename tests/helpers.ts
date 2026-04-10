@@ -59,7 +59,7 @@ export function tmpGitRepo(prefix = 'cacophony-test-repo-'): string {
   return dir;
 }
 
-export function fixturesDir(): string {
+function fixturesDir(): string {
   return path.join(import.meta.dirname, 'fixtures');
 }
 

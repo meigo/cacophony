@@ -13,7 +13,7 @@ interface GhIssue {
   assignees: Array<{ login: string }>;
 }
 
-export function parseBlockedByNumbers(body: string | null): number[] {
+function parseBlockedByNumbers(body: string | null): number[] {
   if (!body) return [];
   const matches = body.matchAll(/blocked\s+by\s+#(\d+)/gi);
   const numbers = new Set<number>();

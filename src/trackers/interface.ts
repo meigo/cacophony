@@ -1,8 +1,6 @@
 import path from 'node:path';
 import type { TrackerAdapter, TrackerConfig } from '../types.js';
 
-export type { TrackerAdapter } from '../types.js';
-
 export async function createTracker(config: TrackerConfig): Promise<TrackerAdapter> {
   switch (config.kind) {
     case 'github': {
