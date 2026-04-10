@@ -309,19 +309,49 @@ export function dashboardHtml(): string {
 
   <!-- Create task (files tracker only) -->
   <div class="creator" x-show="trackerKind === 'files'">
-    <form @submit.prevent="createTask()">
-      <textarea x-model="newTask.prompt" placeholder="Describe what needs to be done..." required rows="3"></textarea>
+    <form @submit.prevent="runTask()">
+      <textarea x-model="newTask.prompt" placeholder="Describe what needs to be done..." required rows="3" :disabled="runBusy"></textarea>
       <div class="creator-row">
-        <select x-model="newTask.priority">
-          <option value="">No priority</option>
-          <option value="1">P1 (urgent)</option>
-          <option value="2">P2 (high)</option>
-          <option value="3">P3 (normal)</option>
-          <option value="4">P4 (low)</option>
-        </select>
-        <button type="submit" class="btn primary">Create</button>
+        <label x-show="briefEnabled" style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem;color:var(--text-dim);">
+          <input type="checkbox" x-model="newTask.skipBrief"> Skip brief
+        </label>
+        <div class="creator-spacer" style="flex:1;"></div>
+        <button type="submit" class="btn primary" :disabled="runBusy" x-text="runBusy ? 'Briefing…' : 'Run'"></button>
       </div>
     </form>
+  </div>
+
+  <!-- Brief modal: clarification questions before the task runs -->
+  <div class="modal-backdrop" x-show="brief" @keydown.escape.window="cancelBrief()">
+    <div class="modal" @click.stop x-show="brief" x-transition>
+      <div class="modal-head">
+        <div>
+          <div class="modal-title">Brief the agent</div>
+          <div class="modal-id" x-text="'round ' + (brief?.round || 1) + ' of ' + (briefMaxRounds || 2)"></div>
+        </div>
+        <button class="icon-btn" @click="cancelBrief()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-section">
+          <div class="modal-label">Your request</div>
+          <div class="modal-desc" x-text="brief?.originalPrompt || ''"></div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-label">A few clarifying questions</div>
+          <template x-for="(q, i) in (brief?.questions || [])" :key="i">
+            <div style="margin-bottom: 0.75rem;">
+              <div style="font-size: 0.9rem; margin-bottom: 0.25rem;" x-text="q"></div>
+              <textarea x-model="brief.answers[i]" rows="2" style="width:100%;" placeholder="Your answer..."></textarea>
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="cancelBrief()">Cancel</button>
+        <button class="btn" @click="skipBriefNow()">Skip, run as-is</button>
+        <button class="btn primary" :disabled="runBusy" @click="continueBrief()" x-text="runBusy ? 'Refining…' : 'Continue'"></button>
+      </div>
+    </div>
   </div>
 
   <!-- Filter tabs -->
@@ -337,6 +367,7 @@ export function dashboardHtml(): string {
     </button>
     <div class="filter-spacer"></div>
     <input type="text" class="search" x-model="search" placeholder="Search tasks... (press /)">
+    <button class="btn danger" @click="deleteAllVisible()" x-show="filteredTasks.length > 0" :title="'Delete all ' + filteredTasks.length + ' visible tasks'">Clear</button>
   </div>
 
   <!-- Task list -->
@@ -345,8 +376,9 @@ export function dashboardHtml(): string {
       <div class="task" :class="{
           done: isDone(t),
           running: isRunning(t),
-          failed: hasFailed(t)
-        }" @click="openTask(t)">
+          failed: hasFailed(t),
+          child: t._depth > 0
+        }" :style="t._depth > 0 ? 'margin-left:' + (t._depth * 1.5) + 'rem' : ''" @click="openTask(t)">
         <div class="state-dot" :class="stateClass(t)"></div>
         <div class="task-id" x-text="t.identifier"></div>
         <div class="task-title" x-text="t.title"></div>
@@ -421,13 +453,13 @@ export function dashboardHtml(): string {
         </div>
       </div>
       <div class="modal-foot" x-show="trackerKind === 'files' && selected">
-        <template x-if="selected?.state === 'todo'">
+        <template x-if="selected && !selected?._historical && selected?.state === 'todo'">
           <button class="btn primary" @click="setState(selected, 'in-progress'); selected = null">Start</button>
         </template>
-        <template x-if="selected?.state === 'in-progress'">
+        <template x-if="selected && !selected?._historical && selected?.state === 'in-progress'">
           <button class="btn primary" @click="setState(selected, 'done'); selected = null">Mark done</button>
         </template>
-        <template x-if="selected && isDone(selected)">
+        <template x-if="selected && !selected?._historical && isDone(selected)">
           <button class="btn" @click="setState(selected, 'todo'); selected = null">Reopen</button>
         </template>
         <button class="btn danger" @click="deleteTask(selected); selected = null">Delete</button>
@@ -448,11 +480,15 @@ function app() {
     trackerKind: '',
     activeStates: ['todo','in-progress'],
     terminalStates: ['done','cancelled','wontfix'],
+    briefEnabled: false,
+    briefMaxRounds: 2,
     connected: false,
     filter: 'active',
     search: '',
     selected: null,
-    newTask: { prompt: '', priority: '' },
+    newTask: { prompt: '', priority: '', skipBrief: false },
+    brief: null,
+    runBusy: false,
     _tick: 0,  // force re-render for elapsed time
 
     async init() {
@@ -478,6 +514,8 @@ function app() {
         this.trackerKind = status.trackerKind || '';
         if (status.activeStates?.length) this.activeStates = status.activeStates;
         if (status.terminalStates?.length) this.terminalStates = status.terminalStates;
+        this.briefEnabled = !!status.briefEnabled;
+        this.briefMaxRounds = status.briefMaxRounds || 2;
         this.running = status.running || [];
         this.retrying = status.retrying || [];
         this.tasks = tasks;
@@ -495,34 +533,117 @@ function app() {
     },
 
     // --- computed ---
+    // Synthetic "task" entries built from successful run history. Used for the
+    // Done tab so finished work is still visible after the .md file is deleted.
+    get historicalDoneTasks() {
+      // Find the latest successful run AND the latest run with a prompt for each
+      // identifier — sometimes the prompt is only on earlier attempts (e.g. retries
+      // that didn't preserve description) but we still want to show what was asked.
+      const latestSuccess = new Map();
+      const latestPrompt = new Map();
+      for (const r of this.runs) {
+        if (r.status === 'succeeded') {
+          const existing = latestSuccess.get(r.issueIdentifier);
+          if (!existing || (r.finishedAt && r.finishedAt > (existing.finishedAt || ''))) {
+            latestSuccess.set(r.issueIdentifier, r);
+          }
+        }
+        if (r.prompt) {
+          const existing = latestPrompt.get(r.issueIdentifier);
+          if (!existing || (r.startedAt && r.startedAt > (existing.startedAt || ''))) {
+            latestPrompt.set(r.issueIdentifier, r);
+          }
+        }
+      }
+      return Array.from(latestSuccess.values()).map(r => {
+        const promptRun = latestPrompt.get(r.issueIdentifier);
+        const description = promptRun?.prompt || '';
+        // Derive a readable title from the first non-empty line of the prompt
+        let title = r.issueIdentifier;
+        if (description) {
+          const firstLine = description.split('\\n').map(l => l.trim()).find(l => l) || '';
+          const cleaned = firstLine.replace(/^#+\s*/, '').slice(0, 80);
+          if (cleaned) title = cleaned;
+        }
+        return {
+          id: r.issueId || r.issueIdentifier,
+          identifier: r.issueIdentifier,
+          title,
+          description,
+          state: 'done',
+          priority: null,
+          labels: [],
+          blockedBy: [],
+          parent: null,
+          url: null,
+          startedAt: r.startedAt,
+          updatedAt: r.finishedAt || r.startedAt,
+          createdAt: r.startedAt,
+          _historical: true,
+        };
+      });
+    },
     get filteredTasks() {
       const term = this.search.toLowerCase().trim();
-      let list = this.tasks;
-      if (this.filter === 'active') list = list.filter(t => this.activeStates.includes(t.state));
-      else if (this.filter === 'done') list = list.filter(t => this.isDone(t));
+      let list;
+      if (this.filter === 'done') {
+        // Done tab pulls from run history, not task files (which are deleted on success).
+        list = this.historicalDoneTasks;
+      } else if (this.filter === 'active') {
+        list = this.tasks.filter(t => this.activeStates.includes(t.state));
+      } else {
+        // 'all': merge active task files with historical done runs
+        const activeIds = new Set(this.tasks.map(t => t.identifier));
+        const historical = this.historicalDoneTasks.filter(t => !activeIds.has(t.identifier));
+        list = [...this.tasks, ...historical];
+      }
       if (term) list = list.filter(t =>
         (t.title || '').toLowerCase().includes(term) ||
         (t.identifier || '').toLowerCase().includes(term) ||
         (t.description || '').toLowerCase().includes(term)
       );
-      return list.slice().sort((a,b) => {
-        // Running first
+
+      const sortFn = (a, b) => {
         const ar = this.isRunning(a) ? 0 : 1;
         const br = this.isRunning(b) ? 0 : 1;
         if (ar !== br) return ar - br;
-        // Priority next
         const pa = a.priority ?? 999;
         const pb = b.priority ?? 999;
         if (pa !== pb) return pa - pb;
-        // Identifier
         return (a.identifier || '').localeCompare(b.identifier || '');
-      });
+      };
+
+      // Group by parent so children render under their parent (flattened, with depth).
+      const byId = new Map(list.map(t => [t.identifier, t]));
+      const childrenOf = new Map();
+      for (const t of list) {
+        if (t.parent && byId.has(t.parent)) {
+          if (!childrenOf.has(t.parent)) childrenOf.set(t.parent, []);
+          childrenOf.get(t.parent).push(t);
+        }
+      }
+      const topLevel = list.filter(t => !t.parent || !byId.has(t.parent)).sort(sortFn);
+      const result = [];
+      const visited = new Set();
+      const emit = (task, depth) => {
+        if (visited.has(task.identifier)) return;
+        visited.add(task.identifier);
+        result.push({ ...task, _depth: depth });
+        const kids = (childrenOf.get(task.identifier) || []).slice().sort(sortFn);
+        for (const kid of kids) emit(kid, depth + 1);
+      };
+      for (const t of topLevel) emit(t, 0);
+      return result;
     },
     get counts() {
+      const active = this.tasks.filter(t => this.activeStates.includes(t.state)).length;
+      const done = this.historicalDoneTasks.length;
+      const activeIds = new Set(this.tasks.map(t => t.identifier));
+      const historicalUnique = this.historicalDoneTasks.filter(t => !activeIds.has(t.identifier)).length;
       return {
-        active: this.tasks.filter(t => this.activeStates.includes(t.state)).length,
-        done: this.tasks.filter(t => this.isDone(t)).length,
-        all: this.tasks.length,
+        active,
+        done,
+        all: this.tasks.length + historicalUnique,
       };
     },
     get succeededCount() {
@@ -603,18 +724,96 @@ function app() {
       this.selected = t;
     },
 
-    async createTask() {
+    async runTask() {
       const prompt = (this.newTask.prompt || '').trim();
-      if (!prompt) return;
-      const body = {
-        prompt,
-        priority: this.newTask.priority ? Number(this.newTask.priority) : null,
+      if (!prompt || this.runBusy) return;
+      const priority = this.newTask.priority ? Number(this.newTask.priority) : null;
+
+      // Skip brief: either the user checked the box, or brief is disabled in config.
+      if (!this.briefEnabled || this.newTask.skipBrief) {
+        await this.submitTask(prompt, priority);
+        return;
+      }
+
+      // Kick off a brief round with just the user's prompt.
+      this.runBusy = true;
+      try {
+        const result = await this.briefCall([{ role: 'user', content: prompt }]);
+        await this.handleBriefResult(result, prompt, priority, [{ role: 'user', content: prompt }]);
+      } finally {
+        this.runBusy = false;
+      }
+    },
+
+    async briefCall(transcript) {
+      try {
+        const r = await fetch('/api/v1/brief', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ transcript }),
+        });
+        if (!r.ok) throw new Error('brief failed');
+        return await r.json();
+      } catch (e) {
+        // Brief endpoint unavailable or failed — degrade gracefully.
+        return { status: 'ready', title: '', prompt: transcript[0].content, round: 1, maxRounds: this.briefMaxRounds };
+      }
+    },
+
+    async handleBriefResult(result, originalPrompt, priority, transcript) {
+      if (result.status === 'ready') {
+        this.brief = null;
+        await this.submitTask(result.prompt || originalPrompt, priority);
+        return;
+      }
+      // clarify: open / update the brief modal
+      this.brief = {
+        originalPrompt,
+        priority,
+        transcript,
+        questions: result.questions || [],
+        answers: new Array((result.questions || []).length).fill(''),
+        round: result.round || 1,
       };
+    },
+
+    async continueBrief() {
+      if (!this.brief || this.runBusy) return;
+      this.runBusy = true;
+      try {
+        const answersText = this.brief.questions
+          .map((q, i) => 'Q: ' + q + '\\nA: ' + (this.brief.answers[i] || '').trim())
+          .join('\\n\\n');
+        const nextTranscript = [
+          ...this.brief.transcript,
+          { role: 'assistant', content: JSON.stringify({ status: 'clarify', questions: this.brief.questions }) },
+          { role: 'user', content: answersText },
+        ];
+        const result = await this.briefCall(nextTranscript);
+        await this.handleBriefResult(result, this.brief.originalPrompt, this.brief.priority, nextTranscript);
+      } finally {
+        this.runBusy = false;
+      }
+    },
+
+    async skipBriefNow() {
+      if (!this.brief) return;
+      const { originalPrompt, priority } = this.brief;
+      this.brief = null;
+      await this.submitTask(originalPrompt, priority);
+    },
+
+    cancelBrief() {
+      this.brief = null;
+    },
+
+    async submitTask(prompt, priority) {
+      const body = { prompt, priority };
       await this.fetch('/api/v1/tasks', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify(body),
       });
-      this.newTask = { prompt: '', priority: '' };
+      this.newTask = { prompt: '', priority: '', skipBrief: false };
       await this.refresh();
     },
 
@@ -629,6 +828,21 @@ function app() {
     async deleteTask(t) {
       if (!confirm('Delete ' + t.identifier + '?')) return;
       await this.fetch('/api/v1/tasks/' + encodeURIComponent(t.identifier), { method: 'DELETE' });
+      await this.refresh();
+    },
+
+    async deleteAllVisible() {
+      const targets = this.filteredTasks.slice();
+      if (targets.length === 0) return;
+      const label = this.filter === 'active'
+        ? 'all ' + targets.length + ' active task' + (targets.length === 1 ? '' : 's')
+        : this.filter === 'done'
+          ? 'all ' + targets.length + ' completed task' + (targets.length === 1 ? '' : 's') + ' from history'
+          : 'all ' + targets.length + ' task' + (targets.length === 1 ? '' : 's');
+      if (!confirm('Delete ' + label + '? This cannot be undone.')) return;
+      await Promise.all(targets.map(t =>
+        this.fetch('/api/v1/tasks/' + encodeURIComponent(t.identifier), { method: 'DELETE' }).catch(() => {})
+      ));
       await this.refresh();
     },
 

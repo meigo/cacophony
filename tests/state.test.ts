@@ -272,4 +272,71 @@ describe('StateStore', () => {
       store2.close();
     });
   });
+
+  describe('purgeByIdentifier', () => {
+    it('wipes runs, issues cache, and pending retries for the identifier', () => {
+      // Seed all three tables for a single identifier
+      store.createRun('issue-1', 'task-a', 0, '/ws');
+      store.createRun('issue-1', 'task-a', 1, '/ws');
+      store.upsertIssue(makeIssue({ id: 'issue-1', identifier: 'task-a' }));
+      store.upsertRetry({
+        issueId: 'issue-1',
+        identifier: 'task-a',
+        attempt: 2,
+        dueAtMs: 1000,
+        error: null,
+      });
+
+      // Seed an unrelated identifier that must NOT be touched
+      store.createRun('issue-2', 'task-b', 0, '/ws');
+      store.upsertIssue(makeIssue({ id: 'issue-2', identifier: 'task-b' }));
+
+      const result = store.purgeByIdentifier('task-a');
+      expect(result.runs).toBe(2);
+      expect(result.issues).toBe(1);
+      expect(result.retries).toBe(1);
+
+      // task-a is gone
+      expect(store.getRunsForIssue('issue-1')).toHaveLength(0);
+      expect(store.getIssue('issue-1')).toBeUndefined();
+      expect(store.getRetry('issue-1')).toBeUndefined();
+
+      // task-b is intact
+      expect(store.getRunsForIssue('issue-2')).toHaveLength(1);
+      expect(store.getIssue('issue-2')).toBeDefined();
+    });
+
+    it('returns zero counts when the identifier has no traces', () => {
+      const result = store.purgeByIdentifier('never-existed');
+      expect(result).toEqual({ runs: 0, issues: 0, retries: 0 });
+    });
+  });
+
+  describe('deleteRunsByIdentifier', () => {
+    it('deletes only runs matching the identifier', () => {
+      store.createRun('a', 'task-a', 0, '/ws');
+      store.createRun('a', 'task-a', 1, '/ws');
+      store.createRun('b', 'task-b', 0, '/ws');
+
+      const deleted = store.deleteRunsByIdentifier('task-a');
+      expect(deleted).toBe(2);
+      expect(store.getRunsForIssue('a')).toHaveLength(0);
+      expect(store.getRunsForIssue('b')).toHaveLength(1);
+    });
+  });
+
+  describe('prompt column', () => {
+    it('stores and returns the prompt on createRun', () => {
+      const id = store.createRun('issue-1', 'task-a', 0, '/ws', 'do the thing');
+      const runs = store.getRunsForIssue('issue-1');
+      const found = runs.find((r) => r.id === id);
+      expect(found?.prompt).toBe('do the thing');
+    });
+
+    it('persists null when no prompt is provided', () => {
+      const id = store.createRun('issue-1', 'task-a', 0, '/ws');
+      const runs = store.getRunsForIssue('issue-1');
+      expect(runs.find((r) => r.id === id)?.prompt).toBeNull();
+    });
+  });
 });

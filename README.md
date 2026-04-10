@@ -6,7 +6,7 @@ A chaotic mess of agents doing their thing. Provider-agnostic agent orchestrator
 
 Cacophony is a daemon you run **inside your project's git repo**:
 
-1. Watches a local `tasks/` directory of markdown files for work (or a custom adapter)
+1. Watches `.cacophony/tasks/` (a local directory of markdown files) for work, or a custom adapter
 2. Creates a git worktree per task under `.cacophony/worktrees/` — each on its own branch
 3. Runs a coding agent in each worktree (Claude Code, Codex, Aider, or any CLI tool)
 4. Manages concurrency, retries, and lifecycle hooks
@@ -141,17 +141,21 @@ Shell scripts that run at worktree lifecycle points. All execute with the worktr
 |---|---|
 | `after_create` | Runs once after a worktree is first created. Failure aborts creation. |
 | `before_run` | Runs before each agent attempt. Failure aborts the attempt. |
-| `after_run` | Runs after each agent attempt. Failure is logged and ignored. |
+| `after_run` | Verification gate. Runs after each agent attempt. **If it exits non-zero, the attempt is rejected even when the agent exited 0** — no auto-merge, branch is preserved, task is retried. Typical use: `npm test`, `pytest`, `cargo test`, `go test`, lint/type checks. |
 | `before_remove` | Runs before worktree deletion. Failure is logged and ignored. |
 | `timeout_ms` | Timeout for all hooks (default: 60000) |
 
-Typical use: install deps, run a script to symlink shared caches, etc.
+Typical uses:
 
 ```yaml
 hooks:
   after_create: |
     npm install --prefer-offline
+  after_run: |
+    npm run lint && npm run typecheck && npm test
 ```
+
+The `after_run` hook is the single most important thing to configure if you want cacophony to genuinely verify agent work. Without it, cacophony trusts the agent's exit code; with it, every successful run has passed your quality gate.
 
 ### `polling`
 
@@ -282,7 +286,7 @@ Every `polling.interval_ms`, cacophony:
 
 ### Retry behavior
 
-- **Agent succeeds (exit 0):** Cacophony marks the task as `done` via the tracker's `setIssueState` method. (For custom trackers without `setIssueState`, falls back to a 1-second continuation retry.)
+- **Agent succeeds (exit 0):** Cacophony auto-merges the `cacophony/<id>` branch into the base branch (when the project root is clean and on the base), marks the task as `done` via the tracker's `setIssueState` method, deletes the task file, and removes the worktree. Custom trackers should implement `setIssueState`; if they don't, cacophony falls back to a 1-second continuation retry as a degraded mode.
 - **Agent fails (non-zero exit):** Exponential backoff: 10s, 20s, 40s, 80s... up to `max_retry_backoff_ms`.
 - **Agent times out:** Kill and retry with backoff.
 - **All retries are persisted to SQLite.** If cacophony crashes and restarts, pending retries are restored with corrected delays.

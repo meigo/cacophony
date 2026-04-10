@@ -11,6 +11,7 @@ import type {
   WorkspaceConfig,
   HooksConfig,
   PollingConfig,
+  BriefConfig,
 } from './types.js';
 import type { Logger } from './logger.js';
 
@@ -29,6 +30,11 @@ const DEFAULTS = {
   tracker: {
     activeStates: ['todo', 'in-progress'],
     terminalStates: ['done', 'cancelled', 'wontfix'],
+  },
+  brief: {
+    enabled: true,
+    maxRounds: 2,
+    timeoutMs: 45_000,
   },
 };
 
@@ -74,6 +80,7 @@ function buildConfig(fm: Record<string, unknown>): WorkflowConfig {
   const w = (fm.workspace ?? {}) as Record<string, unknown>;
   const h = (fm.hooks ?? {}) as Record<string, unknown>;
   const p = (fm.polling ?? {}) as Record<string, unknown>;
+  const b = (fm.brief ?? {}) as Record<string, unknown>;
   const s = (fm.server ?? undefined) as { port?: number } | undefined;
 
   const tracker: TrackerConfig = {
@@ -114,7 +121,13 @@ function buildConfig(fm: Record<string, unknown>): WorkflowConfig {
     intervalMs: Number(p.interval_ms ?? DEFAULTS.polling.intervalMs),
   };
 
-  return { tracker, agent, workspace, hooks, polling, server: s };
+  const brief: BriefConfig = {
+    enabled: Boolean(b.enabled ?? DEFAULTS.brief.enabled),
+    maxRounds: Number(b.max_rounds ?? DEFAULTS.brief.maxRounds),
+    timeoutMs: Number(b.timeout_ms ?? DEFAULTS.brief.timeoutMs),
+  };
+
+  return { tracker, agent, workspace, hooks, polling, brief, server: s };
 }
 
 export function validateConfig(config: WorkflowConfig): string[] {

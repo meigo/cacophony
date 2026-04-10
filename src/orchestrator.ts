@@ -17,6 +17,21 @@ import type { Logger } from './logger.js';
 
 const liquid = new Liquid({ strictVariables: false, strictFilters: true });
 
+/**
+ * Returns true if `issue` is still blocked by at least one pending dependency.
+ * A blocker counts as resolved when its state is in `terminalStates`, OR when
+ * its state is 'deleted' (the task file no longer exists, usually because it
+ * completed and was auto-cleaned up).
+ */
+export function isStillBlocked(issue: Issue, terminalStates: string[]): boolean {
+  if (issue.blockedBy.length === 0) return false;
+  return issue.blockedBy.some((b) => {
+    const s = b.state.toLowerCase();
+    if (s === 'deleted') return false;
+    return !terminalStates.includes(s);
+  });
+}
+
 export class Orchestrator {
   private configManager: ConfigManager;
   private store: StateStore;
@@ -143,6 +158,29 @@ export class Orchestrator {
     return this.store.getRecentRuns(limit);
   }
 
+  /**
+   * Wipe everything cacophony knows about a task: db rows (runs, issues, retries),
+   * the in-memory retry timer, and the in-memory claim if held. Use this from the
+   * dashboard's delete handler so a deleted task leaves no trace anywhere.
+   */
+  purgeByIdentifier(identifier: string): { runs: number; issues: number; retries: number } {
+    // Cancel any in-flight retry timer keyed on this identifier. We need the
+    // issue id, but for the files tracker id === identifier; for the live
+    // running map we look up by identifier directly.
+    for (const [issueId, entry] of this.running) {
+      if (entry.issueIdentifier === identifier) {
+        entry.abortController.abort();
+        this.store.finishRun(entry.runId, 'canceled', null, 'task deleted');
+        this.running.delete(issueId);
+        this.claimed.delete(issueId);
+        this.retryEngine?.cancel(issueId);
+        break;
+      }
+    }
+    this.retryEngine?.cancel(identifier);
+    return this.store.purgeByIdentifier(identifier);
+  }
+
   getStatus(): {
     running: Array<{
       issueId: string;
@@ -158,6 +196,8 @@ export class Orchestrator {
     trackerKind: string;
     activeStates: string[];
     terminalStates: string[];
+    briefEnabled: boolean;
+    briefMaxRounds: number;
   } {
     const config = this.configManager.getCurrent().config;
     return {
@@ -175,6 +215,8 @@ export class Orchestrator {
       trackerKind: this.tracker?.kind ?? '',
       activeStates: config.tracker.activeStates ?? [],
       terminalStates: config.tracker.terminalStates ?? [],
+      briefEnabled: config.brief.enabled,
+      briefMaxRounds: config.brief.maxRounds,
     };
   }
 
@@ -191,6 +233,16 @@ export class Orchestrator {
       }
     }
     return false;
+  }
+
+  /**
+   * Trigger an immediate poll cycle. Used after task creation so the new task
+   * dispatches in ~1s instead of waiting up to polling.intervalMs.
+   */
+  pollNow(): void {
+    if (this.shuttingDown) return;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.scheduleTick(0);
   }
 
   // --- Private ---
@@ -236,10 +288,14 @@ export class Orchestrator {
         // Cache issue in DB
         this.store.upsertIssue(issue);
 
-        // Dispatch (non-blocking)
+        // Dispatch (non-blocking). On dispatch failure (workspace creation,
+        // before-run hook, etc.) schedule a backoff retry instead of letting
+        // the next poll re-dispatch immediately — that loop would hammer the
+        // failure with no backoff.
         this.dispatch(issue, 0).catch((e) => {
           this.logger.error(`Dispatch failed for ${issue.identifier}`, { error: String(e) });
           this.claimed.delete(issue.id);
+          this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, 1, String(e));
         });
       }
 
@@ -287,13 +343,8 @@ export class Orchestrator {
       }
     }
 
-    // Blocker rule: skip if any blocker is non-terminal
-    if (issue.blockedBy.length > 0) {
-      const hasNonTerminal = issue.blockedBy.some(
-        (b) => !terminalStates.includes(b.state.toLowerCase()),
-      );
-      if (hasNonTerminal) return false;
-    }
+    // Blocker rule: skip if any blocker is still pending.
+    if (isStillBlocked(issue, terminalStates)) return false;
 
     return true;
   }
@@ -307,17 +358,14 @@ export class Orchestrator {
       log.info(`Workspace ready`, { path: ws.path, new: ws.createdNow });
 
       // Before-run hook
-      const hookResult = await this.workspace.runHook('beforeRun', ws.path);
-      if (!hookResult.ok) {
-        throw new Error(`before_run hook failed: ${hookResult.output}`);
+      const beforeRun = await this.workspace.runHook('beforeRun', ws.path);
+      if (!beforeRun.ok) {
+        throw new Error(`before_run hook failed: ${beforeRun.output}`);
       }
 
       // Render prompt
       const wf = this.configManager.getCurrent();
-      const tasksDir =
-        this.tracker.kind === 'files'
-          ? (this.tracker as { getDir?: () => string }).getDir?.()
-          : undefined;
+      const tasksDir = this.tracker.getTasksDir?.();
       const promptContent = liquid.parseAndRenderSync(wf.promptTemplate, {
         issue: {
           ...issue,
@@ -330,8 +378,15 @@ export class Orchestrator {
         tasks_dir: tasksDir,
       }) as string;
 
-      // Create DB record
-      const runId = this.store.createRun(issue.id, issue.identifier, attempt, ws.path);
+      // Create DB record (preserve the original task description so it survives
+      // task-file deletion and powers the dashboard's historical-task view).
+      const runId = this.store.createRun(
+        issue.id,
+        issue.identifier,
+        attempt,
+        ws.path,
+        issue.description,
+      );
       this.store.updateRunStatus(runId, 'running');
 
       // Track in memory
@@ -384,33 +439,78 @@ export class Orchestrator {
       this.running.delete(issue.id);
       this.claimed.delete(issue.id);
 
-      // After-run hook (best-effort)
-      await this.workspace.runHook('afterRun', ws.path).catch(() => {});
+      // After-run hook is the verification gate: if it fails, the agent's
+      // work is rejected even when the exit code was 0. Typical use is
+      // running `npm test`, `pytest`, etc. — the hook is how users get
+      // enforced testing without trusting the agent blindly.
+      const hookResult = await this.workspace.runHook('afterRun', ws.path).catch((e) => ({
+        ok: false,
+        output: `after_run hook errored: ${String(e)}`,
+      }));
 
       if (result.timedOut) {
         this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out');
         log.warn('Agent timed out', { durationMs: result.durationMs });
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, 'timeout');
-      } else if (result.exitCode === 0) {
+      } else if (result.exitCode === 0 && hookResult.ok) {
         this.store.finishRun(runId, 'succeeded', 0);
         log.info('Agent succeeded', { durationMs: result.durationMs });
         if (this.tracker.setIssueState) {
-          // Tracker can mark tasks done — do that, clean the worktree, and don't loop.
-          // The git branch cacophony/<id> still preserves the agent's commits.
+          // Try to land the work on the base branch first. If the merge is
+          // skipped or conflicts, the cacophony/<id> branch is preserved so
+          // the user can resolve manually.
+          const merge = this.workspace.tryMergeIntoBase(issue.identifier);
+          if (merge.result === 'merged') {
+            log.info('Auto-merged into base branch');
+          } else if (merge.result === 'conflict') {
+            log.warn('Auto-merge conflict — branch preserved for manual resolution', {
+              reason: merge.reason,
+            });
+          } else {
+            log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
+          }
+
+          // Mark done, then delete the task file (the autonomous flow doesn't
+          // need to keep finished prompts around — the merged commits and the
+          // run history in SQLite are the durable record).
           await this.tracker.setIssueState(issue.id, 'done').catch((e) => {
             log.warn('Failed to mark issue done', { error: String(e) });
           });
+          if (this.tracker.deleteIssue) {
+            await this.tracker.deleteIssue(issue.id).catch((e) => {
+              log.warn('Failed to delete done task file', { error: String(e) });
+            });
+          }
           await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
             log.warn('Failed to remove worktree after success', { error: String(e) });
           });
+          // Delete the merged branch only after the worktree is gone, since git
+          // refuses to delete a branch that's checked out anywhere.
+          if (merge.result === 'merged') {
+            this.workspace.deleteBranch(issue.identifier);
+          }
         } else {
           // No way to advance state — fall back to continuation pattern.
           this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
         }
       } else {
-        const errMsg = result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
+        // Either the agent exited non-zero OR the after_run verification hook
+        // rejected its work. Either way, treat it as a failed attempt.
+        const hookFailed = !hookResult.ok;
+        const errMsg = hookFailed
+          ? `after_run failed: ${hookResult.output.slice(0, 500)}`
+          : result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
         this.store.finishRun(runId, 'failed', result.exitCode, errMsg);
-        log.warn('Agent failed', { exitCode: result.exitCode, durationMs: result.durationMs });
+        if (hookFailed && result.exitCode === 0) {
+          log.warn('Agent exited 0 but after_run hook rejected the work', {
+            durationMs: result.durationMs,
+          });
+        } else {
+          log.warn('Agent failed', {
+            exitCode: result.exitCode,
+            durationMs: result.durationMs,
+          });
+        }
 
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
       }

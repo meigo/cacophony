@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS runs (
   issue_identifier TEXT NOT NULL,
   attempt         INTEGER NOT NULL DEFAULT 0,
   workspace_path  TEXT NOT NULL,
+  prompt          TEXT,
   started_at      TEXT NOT NULL DEFAULT (datetime('now')),
   finished_at     TEXT,
   status          TEXT NOT NULL DEFAULT 'preparing_workspace',
@@ -75,11 +76,18 @@ export class StateStore {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.exec(SCHEMA);
+    // Migration: add `prompt` column to existing databases that predate it.
+    const runColumnNames = (
+      this.db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+    ).map((c) => c.name);
+    if (!runColumnNames.includes('prompt')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN prompt TEXT`);
+    }
 
     // Runs
     this.stmtCreateRun = this.db.prepare(`
-      INSERT INTO runs (issue_id, issue_identifier, attempt, workspace_path, status)
-      VALUES (?, ?, ?, ?, 'preparing_workspace')
+      INSERT INTO runs (issue_id, issue_identifier, attempt, workspace_path, prompt, status)
+      VALUES (?, ?, ?, ?, ?, 'preparing_workspace')
     `);
     this.stmtUpdateRunStatus = this.db.prepare(`
       UPDATE runs SET status = ?, error = ? WHERE id = ?
@@ -91,7 +99,7 @@ export class StateStore {
       WHERE id = ?
     `);
     const runColumns = `id, issue_id AS issueId, issue_identifier AS issueIdentifier, attempt,
-             workspace_path AS workspacePath, started_at AS startedAt, finished_at AS finishedAt,
+             workspace_path AS workspacePath, prompt, started_at AS startedAt, finished_at AS finishedAt,
              status, error, exit_code AS exitCode, duration_ms AS durationMs`;
     this.stmtGetActiveRuns = this.db.prepare(`
       SELECT ${runColumns} FROM runs WHERE status IN ('preparing_workspace', 'building_prompt', 'launching_agent', 'running')
@@ -161,8 +169,9 @@ export class StateStore {
     issueIdentifier: string,
     attempt: number,
     workspacePath: string,
+    prompt: string | null = null,
   ): number {
-    const result = this.stmtCreateRun.run(issueId, issueIdentifier, attempt, workspacePath);
+    const result = this.stmtCreateRun.run(issueId, issueIdentifier, attempt, workspacePath, prompt);
     return Number(result.lastInsertRowid);
   }
 
@@ -188,6 +197,32 @@ export class StateStore {
 
   getRecentRuns(limit: number = 20): RunRecord[] {
     return this.stmtGetRecentRuns.all(limit) as RunRecord[];
+  }
+
+  deleteRunsByIdentifier(identifier: string): number {
+    const result = this.db.prepare(`DELETE FROM runs WHERE issue_identifier = ?`).run(identifier);
+    return Number(result.changes);
+  }
+
+  /**
+   * Wipe all db rows belonging to a task: runs (history), issues (cache), and
+   * retries (pending). Used by the unified DELETE handler so deleting a task
+   * leaves no trace in the database.
+   */
+  purgeByIdentifier(identifier: string): { runs: number; issues: number; retries: number } {
+    const tx = this.db.transaction((id: string) => {
+      const runs = Number(
+        this.db.prepare(`DELETE FROM runs WHERE issue_identifier = ?`).run(id).changes,
+      );
+      const issues = Number(
+        this.db.prepare(`DELETE FROM issues WHERE identifier = ?`).run(id).changes,
+      );
+      const retries = Number(
+        this.db.prepare(`DELETE FROM retries WHERE identifier = ?`).run(id).changes,
+      );
+      return { runs, issues, retries };
+    });
+    return tx(identifier);
   }
 
   // --- Issues ---

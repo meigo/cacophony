@@ -14,7 +14,7 @@ function sanitizeIdentifier(identifier: string): string {
     .replace(/\.+$/, '_');
 }
 
-function findGitRoot(startDir: string): string {
+function findGitRoot(startDir: string): string | null {
   try {
     const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: startDir,
@@ -22,10 +22,38 @@ function findGitRoot(startDir: string): string {
     });
     return out.trim();
   } catch {
-    throw new Error(
-      `Not inside a git repository. Run cacophony from your project's root directory.`,
-    );
+    return null;
   }
+}
+
+function ensureGitRepo(startDir: string, logger: Logger): string {
+  const existing = findGitRoot(startDir);
+  if (existing) return existing;
+
+  // Not a git repo — initialize one at startDir. Default to main as the
+  // initial branch since that's what cacophony's auto-merge assumes.
+  try {
+    execFileSync('git', ['init', '-b', 'main'], {
+      cwd: startDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    // Older gits don't support -b; fall back and rename after.
+    try {
+      execFileSync('git', ['init'], { cwd: startDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      throw new Error(
+        `Not inside a git repository and cacophony could not initialize one at ${startDir}: ${e}`,
+      );
+    }
+  }
+  logger.info('Initialized new git repository', { path: startDir });
+
+  const root = findGitRoot(startDir);
+  if (!root) {
+    throw new Error(`git init appeared to succeed but the repository is not detectable.`);
+  }
+  return root;
 }
 
 function ensureInitialCommit(projectRoot: string, logger: Logger): void {
@@ -99,7 +127,9 @@ export class WorkspaceManager {
   private logger: Logger;
 
   constructor(projectRoot: string, hooks: HooksConfig, logger: Logger, baseBranch?: string) {
-    this.projectRoot = findGitRoot(projectRoot);
+    // Initialize a git repo at projectRoot if one doesn't already exist,
+    // then bootstrap an initial commit if there's no history yet.
+    this.projectRoot = ensureGitRepo(projectRoot, logger);
     this.worktreeRoot = path.join(this.projectRoot, '.cacophony', 'worktrees');
     this.logger = logger;
     ensureInitialCommit(this.projectRoot, logger);
@@ -201,7 +231,7 @@ export class WorkspaceManager {
       const result = await this.runHook('afterCreate', wsPath);
       if (!result.ok) {
         // Cleanup failed worktree
-        await this.removeWorktree(wsPath, branchName);
+        await this.removeWorktree(wsPath);
         throw new Error(`after_create hook failed: ${result.output}`);
       }
     }
@@ -264,7 +294,6 @@ export class WorkspaceManager {
   async removeWorkspace(issueIdentifier: string): Promise<void> {
     const key = sanitizeIdentifier(issueIdentifier);
     const wsPath = path.join(this.worktreeRoot, key);
-    const branchName = `cacophony/${key}`;
 
     if (!fs.existsSync(wsPath)) return;
 
@@ -272,21 +301,146 @@ export class WorkspaceManager {
       await this.runHook('beforeRemove', wsPath);
     }
 
-    await this.removeWorktree(wsPath, branchName);
+    await this.removeWorktree(wsPath);
   }
 
-  private commitDirtyWorktree(wsPath: string): void {
-    if (!fs.existsSync(wsPath)) return;
+  /**
+   * Delete the cacophony/<id> branch. Safe to call only after the worktree
+   * has been removed (git refuses while a branch is checked out in any
+   * worktree). Used after a successful auto-merge.
+   */
+  deleteBranch(issueIdentifier: string): void {
+    const key = sanitizeIdentifier(issueIdentifier);
+    const branchName = `cacophony/${key}`;
+    try {
+      execFileSync('git', ['branch', '-D', branchName], {
+        cwd: this.projectRoot,
+        stdio: 'ignore',
+      });
+      this.logger.info('Deleted merged branch', { branch: branchName });
+    } catch (e) {
+      this.logger.warn('Failed to delete merged branch', {
+        branch: branchName,
+        error: String(e),
+      });
+    }
+  }
+
+  /**
+   * Try to merge the task's branch into the configured base branch in the
+   * project root. Returns 'merged' on success, 'conflict' on merge conflict
+   * (the merge is aborted), or 'skipped' if the project root isn't ready
+   * (dirty tree or checked out on a different branch). The branch and
+   * worktree are left intact in the conflict and skipped cases so the user
+   * can resolve manually.
+   */
+  tryMergeIntoBase(issueIdentifier: string): {
+    result: 'merged' | 'conflict' | 'skipped';
+    reason?: string;
+  } {
+    const key = sanitizeIdentifier(issueIdentifier);
+    const branchName = `cacophony/${key}`;
+    const wsPath = path.join(this.worktreeRoot, key);
+
+    // Make sure any forgotten work is committed before merging
+    this.commitDirtyWorktree(wsPath);
+
+    // Verify the branch actually exists
+    try {
+      execFileSync('git', ['rev-parse', '--verify', branchName], {
+        cwd: this.projectRoot,
+        stdio: 'ignore',
+      });
+    } catch {
+      return { result: 'skipped', reason: `branch ${branchName} not found` };
+    }
+
+    // Project root must be on the base branch
+    let currentBranch: string;
+    try {
+      currentBranch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], {
+        cwd: this.projectRoot,
+        encoding: 'utf-8',
+      }).trim();
+    } catch {
+      return { result: 'skipped', reason: 'project root has detached HEAD' };
+    }
+    if (currentBranch !== this.baseBranch) {
+      return {
+        result: 'skipped',
+        reason: `project root is on ${currentBranch}, not ${this.baseBranch}`,
+      };
+    }
+
+    // Project root must be clean (modified tracked files block a merge;
+    // untracked files like .DS_Store do not).
+    let dirty: string;
+    try {
+      dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+        cwd: this.projectRoot,
+        encoding: 'utf-8',
+      });
+    } catch (e) {
+      return { result: 'skipped', reason: `git status failed: ${e}` };
+    }
+    if (dirty.trim() !== '') {
+      return { result: 'skipped', reason: 'project root has uncommitted tracked changes' };
+    }
+
+    // Do the merge. The branch isn't deleted here because the worktree still
+    // has it checked out — git refuses. Caller should delete the branch after
+    // removing the worktree (see deleteBranch).
+    try {
+      execFileSync(
+        'git',
+        ['merge', '--no-ff', '-m', `cacophony: merge ${branchName}`, branchName],
+        { cwd: this.projectRoot, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      this.logger.info('Auto-merged into base branch', {
+        branch: branchName,
+        base: this.baseBranch,
+      });
+      return { result: 'merged' };
+    } catch (e) {
+      // Conflict — abort the merge so the project root is left clean
+      try {
+        execFileSync('git', ['merge', '--abort'], {
+          cwd: this.projectRoot,
+          stdio: 'ignore',
+        });
+      } catch {
+        // ignore
+      }
+      this.logger.warn('Auto-merge failed (conflict)', {
+        branch: branchName,
+        error: String(e),
+      });
+      return { result: 'conflict', reason: String(e) };
+    }
+  }
+
+  /**
+   * If the worktree has uncommitted changes, stage and commit them on the
+   * cacophony/<id> branch. Returns 'clean' if nothing to commit, 'committed'
+   * on success, 'failed' if the commit could not be made (in which case the
+   * caller MUST NOT delete the worktree — work would be lost).
+   */
+  private commitDirtyWorktree(wsPath: string): 'clean' | 'committed' | 'failed' {
+    if (!fs.existsSync(wsPath)) return 'clean';
     let dirty: string;
     try {
       dirty = execFileSync('git', ['status', '--porcelain'], {
         cwd: wsPath,
         encoding: 'utf-8',
       });
-    } catch {
-      return;
+    } catch (e) {
+      this.logger.warn('git status failed in worktree', {
+        path: wsPath,
+        error: String(e),
+      });
+      return 'failed';
     }
-    if (dirty.trim() === '') return;
+    if (dirty.trim() === '') return 'clean';
     try {
       execFileSync('git', ['add', '-A'], { cwd: wsPath, stdio: 'ignore' });
       execFileSync('git', ['commit', '-m', 'cacophony: auto-commit before worktree cleanup'], {
@@ -294,18 +448,25 @@ export class WorkspaceManager {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       this.logger.info('Auto-committed uncommitted agent work', { path: wsPath });
+      return 'committed';
     } catch (e) {
-      this.logger.warn('Failed to auto-commit dirty worktree', {
+      this.logger.error('Failed to auto-commit dirty worktree — leaving worktree in place', {
         path: wsPath,
         error: String(e),
       });
+      return 'failed';
     }
   }
 
-  private async removeWorktree(wsPath: string, _branchName: string): Promise<void> {
+  private async removeWorktree(wsPath: string): Promise<void> {
     // Preserve any work the agent forgot to commit. The cacophony/<id> branch
     // is the durable record of the run; the worktree dir is just scratch space.
-    this.commitDirtyWorktree(wsPath);
+    // If the auto-commit fails, do NOT delete the worktree — the user can
+    // inspect and resolve manually. Losing work silently is worse than a
+    // lingering worktree.
+    if (this.commitDirtyWorktree(wsPath) === 'failed') {
+      return;
+    }
 
     try {
       execFileSync('git', ['worktree', 'remove', '--force', wsPath], {

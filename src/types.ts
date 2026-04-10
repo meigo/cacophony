@@ -11,6 +11,7 @@ export interface Issue {
   url: string | null;
   labels: string[];
   blockedBy: BlockerRef[];
+  parent: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +31,9 @@ export interface TrackerAdapter {
   fetchIssueStatesByIds(ids: string[]): Promise<Pick<Issue, 'id' | 'identifier' | 'state'>[]>;
   fetchTerminalIssues?(): Promise<Issue[]>;
   setIssueState?(issueId: string, state: string): Promise<void>;
+  deleteIssue?(issueId: string): Promise<void>;
+  /** Absolute path where new tasks can be written (used for self-decomposition prompts). */
+  getTasksDir?(): string;
 }
 
 // === Workflow / Config ===
@@ -45,7 +49,14 @@ export interface WorkflowConfig {
   workspace: WorkspaceConfig;
   hooks: HooksConfig;
   polling: PollingConfig;
+  brief: BriefConfig;
   server?: { port?: number };
+}
+
+export interface BriefConfig {
+  enabled: boolean;
+  maxRounds: number;
+  timeoutMs: number;
 }
 
 export interface TrackerConfig {
@@ -101,6 +112,7 @@ export interface RunRecord {
   issueIdentifier: string;
   attempt: number;
   workspacePath: string;
+  prompt: string | null;
   startedAt: string;
   finishedAt: string | null;
   status: RunStatus;

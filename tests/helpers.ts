@@ -5,7 +5,9 @@ import { execFileSync } from 'node:child_process';
 import type { Issue } from '../src/types.js';
 
 export function tmpDir(prefix = 'cacophony-test-'): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // Resolve symlinks (e.g. macOS /var → /private/var) so test path comparisons
+  // match what git and path.resolve return from inside the directory.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 export function writeFile(dir: string, name: string, content: string): string {
@@ -35,6 +37,7 @@ export function makeIssue(overrides: Partial<Issue> = {}): Issue {
     url: null,
     labels: ['todo'],
     blockedBy: [],
+    parent: null,
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,

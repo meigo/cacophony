@@ -10,6 +10,8 @@ import { StateStore } from './state.js';
 import { Orchestrator } from './orchestrator.js';
 import { Logger } from './logger.js';
 import type { FilesTracker } from './trackers/files.js';
+import { slugifyPrompt, uniqueIdentifier } from './slug.js';
+import { runBrief } from './brief.js';
 
 const USAGE = `
 ${chalk.bold('cacophony')} — Provider-agnostic agent orchestrator
@@ -97,33 +99,6 @@ function resolveDbPath(projectRoot: string): string {
   return path.join(cacoDir, 'cacophony.db');
 }
 
-function slugifyPrompt(prompt: string): string {
-  // Take the first non-empty line, strip a leading "# " if it looks like a heading
-  const firstLine = prompt
-    .split('\n')
-    .map((l) => l.trim())
-    .find((l) => l.length > 0)
-    ?.replace(/^#+\s*/, '');
-  const source = firstLine ?? 'task';
-  const slug = source
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-    .replace(/-+$/, '');
-  return slug || 'task';
-}
-
-function uniqueIdentifier(tracker: FilesTracker, base: string): string {
-  if (!tracker.getTask(base)) return base;
-  for (let i = 2; i < 1000; i++) {
-    const candidate = `${base}-${i}`;
-    if (!tracker.getTask(candidate)) return candidate;
-  }
-  // Extremely unlikely fallback
-  return `${base}-${Date.now()}`;
-}
-
 // --- Init ---
 
 function ask(rl: readline.Interface, question: string, fallback?: string): Promise<string> {
@@ -157,7 +132,8 @@ function choose(
 interface AgentPreset {
   command: (model?: string) => string;
   delivery: string;
-  defaultModel?: string;
+  /** First entry is the default; the init wizard presents these as a picker. */
+  models?: string[];
 }
 
 const AGENT_PRESETS: Record<string, AgentPreset> = {
@@ -165,12 +141,12 @@ const AGENT_PRESETS: Record<string, AgentPreset> = {
     command: (model) =>
       `claude -p {{prompt_file}} --output-format stream-json --verbose --dangerously-skip-permissions${model ? ` --model ${model}` : ''}`,
     delivery: 'file',
-    defaultModel: 'claude-sonnet-4-6',
+    models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
   },
   Codex: {
     command: (model) => `codex --prompt {{prompt_file}}${model ? ` --model ${model}` : ''}`,
     delivery: 'file',
-    defaultModel: 'gpt-5',
+    models: ['gpt-5', 'gpt-5-mini', 'o4-mini'],
   },
   Aider: {
     command: () => 'aider --message-file {{prompt_file}} --yes',
@@ -180,11 +156,18 @@ const AGENT_PRESETS: Record<string, AgentPreset> = {
     command: () => 'gemini < {{prompt_file}}',
     delivery: 'file',
   },
+  'Qwen Code': {
+    command: (model) => `qwen --yolo${model ? ` --model ${model}` : ''} < {{prompt_file}}`,
+    delivery: 'file',
+    models: ['qwen3.6-plus', 'qwen3.5-plus', 'qwen3-coder'],
+  },
   Custom: {
     command: () => '',
     delivery: 'file',
   },
 };
+
+const CUSTOM_MODEL_LABEL = 'Custom…';
 
 async function cmdInit(): Promise<void> {
   const outPath = path.resolve(DEFAULT_CONFIG_PATH);
@@ -222,8 +205,10 @@ async function cmdInit(): Promise<void> {
     );
     const deliveryChoice = await choose(rl, 'How to pass the prompt:', ['file', 'stdin', 'arg'], 0);
     agentDelivery = deliveryChoice;
-  } else if (preset.defaultModel) {
-    const model = await ask(rl, 'Model', preset.defaultModel);
+  } else if (preset.models?.length) {
+    const options = [...preset.models, CUSTOM_MODEL_LABEL];
+    const picked = await choose(rl, 'Model:', options, 0);
+    const model = picked === CUSTOM_MODEL_LABEL ? await ask(rl, 'Model name') : picked;
     agentCommand = preset.command(model);
   }
 
@@ -263,7 +248,13 @@ Before writing any code, judge whether this task is small enough to finish in a 
 
 To split the task, write 2–6 markdown files into {{tasks_dir}}/. Each file represents one subtask and must be self-contained: the agent that picks it up will not have access to this prompt or to the other subtasks.
 
-Each subtask file must have YAML front matter with at least state: todo (and optionally priority: 1-4), followed by a short markdown body that fully describes the subtask. The filename should be a short slug ending in .md (letters, digits, hyphens only). If subtask B depends on subtask A, add blocked_by: [A-slug] to B's front matter and cacophony will run them in order.
+Each subtask file must have YAML front matter with at least:
+
+- state: todo
+- parent: {{issue.identifier}}   (so the dashboard can group children under this task)
+- priority: 1-4   (optional)
+
+…followed by a short markdown body that fully describes the subtask. The filename should be a short slug ending in .md (letters, digits, hyphens only). If subtask B depends on subtask A, add blocked_by: [A-slug] to B's front matter and cacophony will run them in order.
 
 After writing the files, exit cleanly. Cacophony will pick up the subtasks on the next poll.
 
@@ -320,7 +311,7 @@ async function cmdStart(args: string[]): Promise<void> {
   // HTTP dashboard — defaults to 8080 unless --no-server is passed
   if (!args.includes('--no-server')) {
     const port = portStr ? parseInt(portStr, 10) : (config.server?.port ?? 8080);
-    startHttpServer(orchestrator, port, logger);
+    startHttpServer(orchestrator, configManager, port, logger);
   }
 
   await orchestrator.start();
@@ -453,7 +444,12 @@ function getFilesTracker(orchestrator: Orchestrator): FilesTracker | null {
   return null;
 }
 
-function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logger): void {
+function startHttpServer(
+  orchestrator: Orchestrator,
+  configManager: ConfigManager,
+  port: number,
+  logger: Logger,
+): void {
   // Lazy import dashboard
   let dashboardHtmlFn: (() => string) | null = null;
 
@@ -500,6 +496,49 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
         return;
       }
 
+      // --- Brief API (intake interview) ---
+      if (req.method === 'POST' && url.pathname === '/api/v1/brief') {
+        const body = JSON.parse(await readBody(req));
+        const transcript = Array.isArray(body.transcript) ? body.transcript : [];
+        if (transcript.length === 0) {
+          json(400, { error: 'transcript is required and must be non-empty' });
+          return;
+        }
+        // Validate transcript shape
+        for (const m of transcript) {
+          if (
+            !m ||
+            typeof m !== 'object' ||
+            (m.role !== 'user' && m.role !== 'assistant') ||
+            typeof m.content !== 'string'
+          ) {
+            json(400, {
+              error: 'each transcript message must be { role: user|assistant, content: string }',
+            });
+            return;
+          }
+        }
+        const wf = configManager.getCurrent();
+        if (!wf.config.brief.enabled) {
+          json(400, { error: 'brief is disabled in config' });
+          return;
+        }
+        // Round = number of prior assistant turns + 1
+        const round = transcript.filter((m: { role: string }) => m.role === 'assistant').length + 1;
+        const maxRounds = wf.config.brief.maxRounds;
+        const result = await runBrief({
+          transcript,
+          round,
+          maxRounds,
+          agent: wf.config.agent,
+          projectRoot: path.resolve(wf.config.workspace.projectRoot),
+          timeoutMs: wf.config.brief.timeoutMs,
+          logger,
+        });
+        json(200, { ...result, round, maxRounds });
+        return;
+      }
+
       // --- Tasks API (files tracker only) ---
       const filesTracker = getFilesTracker(orchestrator);
 
@@ -527,6 +566,9 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
         const identifier = uniqueIdentifier(filesTracker, slugifyPrompt(prompt));
         filesTracker.createTask(identifier, 'todo', priority ?? null, prompt.trim());
         logger.info(`Task created via API: ${identifier}`);
+        // Nudge the orchestrator to dispatch immediately rather than waiting
+        // for the next poll cycle.
+        orchestrator.pollNow();
         json(201, { created: true, identifier });
         return;
       }
@@ -545,13 +587,14 @@ function startHttpServer(orchestrator: Orchestrator, port: number, logger: Logge
       }
 
       if (req.method === 'DELETE' && url.pathname.match(/^\/api\/v1\/tasks\/[^/]+$/)) {
-        if (!filesTracker) {
-          json(400, { error: 'Task deletion only supported with files tracker' });
-          return;
-        }
         const identifier = decodeURIComponent(url.pathname.split('/').pop()!);
-        const deleted = filesTracker.deleteTask(identifier);
-        json(deleted ? 200 : 404, { deleted, identifier });
+        // Best-effort "remove all trace of this task": the .md file, all run
+        // history, the issues cache row, any pending retry, and the in-memory
+        // retry timer.
+        const fileDeleted = filesTracker ? filesTracker.deleteTask(identifier) : false;
+        const purged = orchestrator.purgeByIdentifier(identifier);
+        const anything = fileDeleted || purged.runs > 0 || purged.issues > 0 || purged.retries > 0;
+        json(anything ? 200 : 404, { fileDeleted, ...purged, identifier });
         return;
       }
 

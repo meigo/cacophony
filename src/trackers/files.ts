@@ -9,6 +9,7 @@ interface TaskFrontMatter {
   labels?: string[];
   branch?: string;
   blocked_by?: string[];
+  parent?: string;
 }
 
 function parseTaskFile(filePath: string, identifier: string): Issue | null {
@@ -55,6 +56,7 @@ function parseTaskFile(filePath: string, identifier: string): Issue | null {
     url: null,
     labels: (frontMatter.labels ?? []).map((l) => l.toLowerCase()),
     blockedBy: [],
+    parent: frontMatter.parent ?? null,
     createdAt: stat.birthtime,
     updatedAt: stat.mtime,
   };
@@ -76,6 +78,10 @@ export class FilesTracker implements TrackerAdapter {
   }
 
   getDir(): string {
+    return this.dir;
+  }
+
+  getTasksDir(): string {
     return this.dir;
   }
 
@@ -185,15 +191,26 @@ export class FilesTracker implements TrackerAdapter {
     this.updateTaskState(issueId, state);
   }
 
+  async deleteIssue(issueId: string): Promise<void> {
+    this.deleteTask(issueId);
+  }
+
   // --- File management (used by API) ---
 
-  createTask(identifier: string, state: string, priority: number | null, content: string): void {
+  createTask(
+    identifier: string,
+    state: string,
+    priority: number | null,
+    content: string,
+    parent: string | null = null,
+  ): void {
     const fileName = `${identifier}.md`;
     const filePath = path.join(this.dir, fileName);
 
     const frontMatter: string[] = [];
     frontMatter.push(`state: ${state}`);
     if (priority != null) frontMatter.push(`priority: ${priority}`);
+    if (parent) frontMatter.push(`parent: ${parent}`);
 
     const fileContent = `---\n${frontMatter.join('\n')}\n---\n\n${content}\n`;
     fs.writeFileSync(filePath, fileContent, 'utf-8');
