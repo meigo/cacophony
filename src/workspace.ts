@@ -46,6 +46,16 @@ function ensureGitRepo(startDir: string, logger: Logger): string {
         `Not inside a git repository and cacophony could not initialize one at ${startDir}: ${e}`,
       );
     }
+    // Rename the unborn default branch to main. `git branch -M main` works on
+    // an unborn HEAD because it just rewrites HEAD's ref target.
+    try {
+      execFileSync('git', ['branch', '-M', 'main'], {
+        cwd: startDir,
+        stdio: 'ignore',
+      });
+    } catch {
+      // Already on main, or an even older git — harmless.
+    }
   }
   logger.info('Initialized new git repository', { path: startDir });
 

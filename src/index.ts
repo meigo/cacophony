@@ -5,13 +5,14 @@ import http from 'node:http';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import chalk from 'chalk';
-import { ConfigManager } from './config.js';
+import { ConfigManager, updateConfigHooks } from './config.js';
 import { StateStore } from './state.js';
 import { Orchestrator } from './orchestrator.js';
 import { Logger } from './logger.js';
 import type { FilesTracker } from './trackers/files.js';
 import { slugifyPrompt, uniqueIdentifier } from './slug.js';
 import { runBrief } from './brief.js';
+import { lookupSkillPack, installSkillPack, isSkillInstalled } from './skills.js';
 
 const USAGE = `
 ${chalk.bold('cacophony')} — Provider-agnostic agent orchestrator
@@ -260,14 +261,17 @@ After writing the files, exit cleanly. Cacophony will pick up the subtasks on th
 
 ## Instructions (only if you decided to do the task yourself)
 
-1. Implement the required changes in this worktree
-2. Inspect the project stack and run appropriate tests (unit, lint, type check) where they exist
-3. Fix any failures — do not move on until everything passes
-4. Commit your work on this branch (cacophony will auto-commit anything you forget, but explicit commits give better history)
-5. Exit cleanly when done — cacophony will mark the task complete and clean up the worktree
+1. **Implement** the required changes in this worktree.
+2. **Build / type-check** the project (e.g. \`npm run build\`, \`cargo build\`, \`go build ./...\`). Runtime-only errors like missing imports, post-install hooks, and wiring mistakes only show up here — don't stop at \`tsc --noEmit\`. If there's no build step, briefly start the app or run a smoke script to catch init-time errors.
+3. **Write tests for any new behavior you introduced.** Not just "make existing tests still pass" — add new tests that exercise the lines you just wrote, including at least one realistic edge case (empty input, missing field, boundary value, or an unexpected state). If the project already has a test framework (vitest, jest, pytest, go test, cargo test, etc.), use it. If there are no tests yet and the feature is non-trivial, introduce a minimal test file for the module you touched rather than leaving it uncovered. A test that only asserts \`return 42\` because you wrote \`return 42\` is worth nothing — write tests that would fail if the implementation were wrong, not ones that just echo it back.
+4. **Run the full test suite** and make sure it passes. Fix any failures, whether in your new tests or pre-existing ones you may have regressed. Do not move on until everything passes.
+5. **Commit** your work on this branch. Cacophony will auto-commit anything you forget, but explicit commits give cleaner history.
+6. **Exit cleanly** when done. Cacophony will mark the task complete, run its verification hook, and clean up the worktree.
+
+A task is not done when the code compiles. A task is done when the code compiles, runs, is covered by tests that actually exercise it, and the full suite is green.
 
 {% if attempt %}
-This is retry attempt #{{attempt}}. The worktree may contain previous work — continue from where it left off.
+This is retry attempt #{{attempt}}. The worktree may contain previous work — continue from where it left off. If the previous attempt failed the verification hook (build / test failure), read the error carefully and fix the underlying cause rather than masking it.
 {% endif %}
 `;
 
@@ -536,6 +540,48 @@ function startHttpServer(
           logger,
         });
         json(200, { ...result, round, maxRounds });
+        return;
+      }
+
+      // --- Skills API ---
+      if (req.method === 'POST' && url.pathname === '/api/v1/skills/install') {
+        const body = JSON.parse(await readBody(req));
+        const framework = typeof body.framework === 'string' ? body.framework.trim() : '';
+        if (!framework) {
+          json(400, { error: 'framework is required' });
+          return;
+        }
+        const pack = lookupSkillPack(framework);
+        if (!pack) {
+          json(404, { error: `no skill pack known for framework "${framework}"` });
+          return;
+        }
+        const projectRoot = path.resolve(configManager.getCurrent().config.workspace.projectRoot);
+        const result = installSkillPack(pack, projectRoot, logger);
+        json(result.installed ? 201 : 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/config/hooks') {
+        const body = JSON.parse(await readBody(req));
+        const afterRun = typeof body.after_run === 'string' ? body.after_run.trim() : undefined;
+        if (!afterRun) {
+          json(400, { error: 'after_run is required' });
+          return;
+        }
+        try {
+          updateConfigHooks(configManager.getFilePath(), { after_run: afterRun });
+          configManager.reload();
+          json(200, { updated: true, after_run: afterRun });
+        } catch (e) {
+          json(500, { error: `Failed to update hooks: ${e}` });
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/skills/status') {
+        const projectRoot = path.resolve(configManager.getCurrent().config.workspace.projectRoot);
+        json(200, { installed: isSkillInstalled(projectRoot) });
         return;
       }
 

@@ -378,14 +378,16 @@ export class Orchestrator {
         tasks_dir: tasksDir,
       }) as string;
 
-      // Create DB record (preserve the original task description so it survives
-      // task-file deletion and powers the dashboard's historical-task view).
+      // Create DB record (preserve the original task description AND the
+      // parent identifier so the dashboard's historical view can still place
+      // a done subtask under its parent after the task file is deleted).
       const runId = this.store.createRun(
         issue.id,
         issue.identifier,
         attempt,
         ws.path,
         issue.description,
+        issue.parent,
       );
       this.store.updateRunStatus(runId, 'running');
 
@@ -448,12 +450,16 @@ export class Orchestrator {
         output: `after_run hook errored: ${String(e)}`,
       }));
 
+      // If the after_run hook produced any output (pass or fail), persist it
+      // on the run record so the dashboard can show the full build log.
+      const hookOutput = hookResult.output || null;
+
       if (result.timedOut) {
-        this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out');
+        this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out', hookOutput);
         log.warn('Agent timed out', { durationMs: result.durationMs });
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, 'timeout');
       } else if (result.exitCode === 0 && hookResult.ok) {
-        this.store.finishRun(runId, 'succeeded', 0);
+        this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
         log.info('Agent succeeded', { durationMs: result.durationMs });
         if (this.tracker.setIssueState) {
           // Try to land the work on the base branch first. If the merge is
@@ -500,7 +506,7 @@ export class Orchestrator {
         const errMsg = hookFailed
           ? `after_run failed: ${hookResult.output.slice(0, 500)}`
           : result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
-        this.store.finishRun(runId, 'failed', result.exitCode, errMsg);
+        this.store.finishRun(runId, 'failed', result.exitCode, errMsg, hookOutput);
         if (hookFailed && result.exitCode === 0) {
           log.warn('Agent exited 0 but after_run hook rejected the work', {
             durationMs: result.durationMs,
@@ -512,7 +518,26 @@ export class Orchestrator {
           });
         }
 
-        this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
+        // Stuck-loop detection: if the last 3 failures all have the same
+        // error, the agent can't self-correct. Give up instead of burning
+        // API credits on an infinite retry loop.
+        const STUCK_THRESHOLD = 3;
+        const recentErrors = this.store.getRecentErrors(issue.id, STUCK_THRESHOLD);
+        if (
+          recentErrors.length >= STUCK_THRESHOLD &&
+          recentErrors.every((e) => e === recentErrors[0])
+        ) {
+          log.error(
+            `Giving up on ${issue.identifier} after ${STUCK_THRESHOLD} identical failures. ` +
+              `The agent cannot self-correct this error. Create a targeted fix task with specific instructions.`,
+          );
+          this.claimed.delete(issue.id);
+          this.retryEngine.cancel(issue.id);
+          // Leave the task file in place (still 'todo') so the user sees it
+          // in the dashboard and can queue a follow-up. Don't auto-delete.
+        } else {
+          this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
+        }
       }
     } catch (e) {
       this.running.delete(issue.id);

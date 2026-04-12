@@ -1,17 +1,22 @@
 # Cacophony
 
-A chaotic mess of agents doing their thing. Provider-agnostic agent orchestrator that polls for work, spins up isolated git worktrees, and runs any coding agent. Persistent state via SQLite. 5 runtime dependencies.
+**A local CI system for LLM coding agents.** You queue a task; cacophony runs a coding agent in an isolated git worktree, verifies the result against your project's build and tests, and auto-merges the work to your base branch. The agent is the build; cacophony is the pipeline.
+
+More precisely, cacophony is an **outer-loop harness for CLI coding agents** like Claude Code, Codex, Qwen Code, Aider, or Gemini CLI. The agents have their own inner loop (read files, run commands, iterate on a single task). Cacophony is what happens *between* agent invocations — queuing, isolation, retry, pre-task refinement, post-task verification, merge, cleanup. If you've used GitHub Actions or Jenkins, the shape will feel familiar; the difference is the work unit is a non-deterministic LLM session instead of a deterministic build.
 
 ## What it does
 
 Cacophony is a daemon you run **inside your project's git repo**:
 
 1. Watches `.cacophony/tasks/` (a local directory of markdown files) for work, or a custom adapter
-2. Creates a git worktree per task under `.cacophony/worktrees/` — each on its own branch
-3. Runs a coding agent in each worktree (Claude Code, Codex, Aider, or any CLI tool)
-4. Manages concurrency, retries, and lifecycle hooks
-5. Persists all state to SQLite — survives crashes and restarts
-6. Serves a web dashboard for managing tasks and monitoring agents
+2. Optionally runs a short "brief" LLM call first to refine ambiguous prompts into actionable tasks
+3. Creates a git worktree per task under `.cacophony/worktrees/` — each on its own branch
+4. Runs a coding agent in that worktree (Claude Code, Codex, Aider, Qwen Code, or any CLI tool)
+5. Runs your verification hook (`npm test`, `pytest`, `cargo build`, etc.) against the result
+6. Auto-merges the branch into the base branch if the hook passes; preserves it for manual review if not
+7. Manages concurrency, retries with exponential backoff, and a full lifecycle hook chain
+8. Persists all state to SQLite — survives crashes and restarts
+9. Serves a web dashboard for queuing tasks, browsing run history, and viewing build logs
 
 You manage work. Cacophony manages agents.
 
@@ -108,7 +113,7 @@ The `.cacophony/config.md` file uses YAML front matter for config and a Liquid t
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `kind` | string | `"files"` | `"files"` or path to a custom adapter |
+| `kind` | string | `"files"` | `"files"` is the only built-in tracker; any other value is resolved as a filesystem path to a custom adapter plugin (see [Custom tracker plugins](#custom-tracker-plugins)) |
 | `dir` | string | `".cacophony/tasks"` | Directory for task files (used by the files tracker) |
 | `active_states` | string[] | `["todo", "in-progress"]` | States that mark issues as active |
 | `terminal_states` | string[] | `["done", "cancelled", "wontfix"]` | States that mark issues as done |
@@ -162,6 +167,25 @@ The `after_run` hook is the single most important thing to configure if you want
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `interval_ms` | number | `30000` | How often to poll the tracker (30s default) |
+
+### `brief` (optional)
+
+Before dispatching a task, cacophony can run a short LLM call (the "brief") that either refines a vague user prompt into a clearer one or asks up to 3 clarifying questions. The brief reuses the same agent command configured in `agent.command`, so it's zero extra setup — it just uses a different prompt. If the brief fails, times out, or returns unparseable output, cacophony falls back to the raw prompt and the task still runs.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Run the pre-task brief before dispatching |
+| `max_rounds` | number | `2` | Max clarification rounds before forcing a ready verdict |
+| `timeout_ms` | number | `45000` | Per-round timeout for the brief subprocess |
+
+To disable entirely:
+
+```yaml
+brief:
+  enabled: false
+```
+
+Or on a per-task basis, tick the **Skip brief** checkbox in the dashboard before clicking Run.
 
 ### `server` (optional)
 
@@ -217,6 +241,9 @@ agent:
 ```
 
 ## Custom tracker plugins
+
+> **Status: dormant extension point, no maintained plugins.**
+> Cacophony's tracker layer used to support multiple backends (GitHub Issues, Linear). Those were removed to focus on the local files-only flow, but the pluggable interface stayed so anyone who needs a non-`files` task source can wire one up without forking. No custom plugins are maintained or shipped today — if you build one, you own it. This section is documentation of the extension point for hackers, not a plugin ecosystem.
 
 Create a JS/TS file that exports a factory function:
 
@@ -299,30 +326,63 @@ Every `polling.interval_ms`, cacophony:
 - Failed worktree creation cleans up with `git worktree remove --force`
 - Each task works on its own branch `cacophony/<identifier>`
 
+### Security: what the agent can and cannot access
+
+Coding agents run with `--dangerously-skip-permissions` (Claude Code), `--yolo` (Qwen Code), `--yes` (Aider), or equivalent flags that disable interactive tool-call approval. This is required for background autonomous operation — without it, the agent would hang waiting for a human to click "Allow" on every file write and shell command.
+
+**There is no process-level sandbox.** The agent runs as your OS user with your full permissions:
+
+- **Filesystem**: can read and write any file your user account can access — not just the worktree, but `$HOME`, other projects, config files, SSH keys, etc. The worktree `cwd` is a hint, not a wall; `cd ..` or absolute paths are not blocked.
+- **Network**: can make any HTTP request, connect to APIs, download or upload data.
+- **Environment**: inherits all exported environment variables (`OPENAI_API_KEY`, `GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, etc.) and anything set via `agent.env` in the config.
+- **Shell**: can run any command on `$PATH` — `curl`, `rm`, `git push`, `ssh`, `docker`, system utilities.
+
+**What cacophony's worktree isolation does protect:**
+
+- Your **main branch** is never modified until the verification gate (`after_run`) passes and auto-merge succeeds. Broken or malicious agent output stays on a `cacophony/<id>` branch until explicitly merged.
+- Agent work is **auto-committed before cleanup**, so even if an agent run goes sideways, the git branch preserves what happened for inspection.
+
+**What it does NOT protect:**
+
+- The agent can modify files outside the worktree, make network calls, or run destructive commands during the session. The worktree is a git-level isolation, not a process-level sandbox.
+- If the agent reads a secret from your environment and writes it to a file it commits, that secret ends up in git history.
+
+**Mitigation options for higher-security environments:**
+
+- Run cacophony inside a **Docker container** with only the project directory mounted and no host network.
+- Use a dedicated **VM or cloud instance** with minimal credentials.
+- Set `agent.env` in the config to pass only the specific env vars the agent needs, rather than inheriting the full shell environment.
+- Wrap the `agent.command` in a sandbox (`docker run ...`, `firejail`, etc.) — the command field is a shell string, so any wrapper works.
+
+For local development on your own machine with your own prompts, the practical risk is low — you control the inputs and the agent uses your own API keys. For shared servers, CI pipelines, or multi-tenant setups, containerization is strongly recommended.
+
 ## Web dashboard
 
-The dashboard is a single-file Alpine.js app served from the daemon. Features:
+The dashboard is a single-file Alpine.js app served from the daemon. Monospaced JetBrains Mono typography, flat grayscale palette, red/green accents reserved for status indicators. Features:
 
 - **Running agents** — live view with elapsed time and one-click stop
 - **Stats** — running / retrying / succeeded / failed counters
-- **Task list** — filterable (active / done / all) with search
-- **Priority badges** — color-coded P1–P4
-- **Blocker indicator** — shows which tasks are waiting on dependencies
-- **Task detail modal** — description, blockers, run history, error traces
+- **Task list** — filterable (active / done / all) with search, parent/child hierarchy indentation
+- **Brief modal** — clarification questions when the brief agent doesn't have enough context to commit to a refined prompt
+- **Task detail modal** — description, blockers, run history, error output, collapsible per-run build log
+- **Dark / light theme toggle** — click the button in the header; persisted to `localStorage` under `caco.theme`
 - **Keyboard shortcuts** — `/` to focus search, `Esc` to close modals
-- **Task creation** — inline form (files tracker only)
+- **Task creation** — single prompt textarea (priority hidden by default; set via task file front matter if needed)
+- **Bulk clear** — wipe all tasks matching the current filter + search
+- **Blocker indicator** — shows which tasks are waiting on dependencies
 
 **API endpoints:**
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Dashboard HTML |
-| `GET` | `/api/v1/status` | Orchestrator state (running, retrying, claimed, trackerKind) |
-| `GET` | `/api/v1/runs?limit=N` | Recent run history |
+| `GET` | `/api/v1/status` | Orchestrator state (running, retrying, claimed, trackerKind, activeStates, terminalStates, briefEnabled, briefMaxRounds) |
+| `GET` | `/api/v1/runs?limit=N` | Recent run history (includes `prompt`, `hookOutput`, and `error` fields) |
 | `GET` | `/api/v1/tasks` | All tasks (files tracker only) |
-| `POST` | `/api/v1/tasks` | Create task `{ prompt, priority }` (identifier is auto-generated from the prompt) |
+| `POST` | `/api/v1/tasks` | Create task `{ prompt, priority? }` (identifier is auto-generated from the prompt) |
+| `POST` | `/api/v1/brief` | Run a brief round `{ transcript: [{ role: "user"\|"assistant", content }] }` → `{ status: "ready" \| "clarify", ... }` |
 | `PUT` | `/api/v1/tasks/:id/state` | Update task state `{ state }` |
-| `DELETE` | `/api/v1/tasks/:id` | Delete task |
+| `DELETE` | `/api/v1/tasks/:id` | Delete task (removes the .md file, all runs, issues cache, pending retries) |
 | `POST` | `/api/v1/stop/:id` | Cancel running agent |
 
 ## Development

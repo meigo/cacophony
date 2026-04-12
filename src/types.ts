@@ -113,10 +113,12 @@ export interface RunRecord {
   attempt: number;
   workspacePath: string;
   prompt: string | null;
+  parent: string | null;
   startedAt: string;
   finishedAt: string | null;
   status: RunStatus;
   error: string | null;
+  hookOutput: string | null;
   exitCode: number | null;
   durationMs: number | null;
 }

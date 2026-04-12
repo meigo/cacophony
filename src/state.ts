@@ -9,10 +9,12 @@ CREATE TABLE IF NOT EXISTS runs (
   attempt         INTEGER NOT NULL DEFAULT 0,
   workspace_path  TEXT NOT NULL,
   prompt          TEXT,
+  parent          TEXT,
   started_at      TEXT NOT NULL DEFAULT (datetime('now')),
   finished_at     TEXT,
   status          TEXT NOT NULL DEFAULT 'preparing_workspace',
   error           TEXT,
+  hook_output     TEXT,
   exit_code       INTEGER,
   duration_ms     INTEGER
 );
@@ -76,31 +78,37 @@ export class StateStore {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.exec(SCHEMA);
-    // Migration: add `prompt` column to existing databases that predate it.
+    // Migrations: add columns to existing databases that predate them.
     const runColumnNames = (
       this.db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
     if (!runColumnNames.includes('prompt')) {
       this.db.exec(`ALTER TABLE runs ADD COLUMN prompt TEXT`);
     }
+    if (!runColumnNames.includes('hook_output')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN hook_output TEXT`);
+    }
+    if (!runColumnNames.includes('parent')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN parent TEXT`);
+    }
 
     // Runs
     this.stmtCreateRun = this.db.prepare(`
-      INSERT INTO runs (issue_id, issue_identifier, attempt, workspace_path, prompt, status)
-      VALUES (?, ?, ?, ?, ?, 'preparing_workspace')
+      INSERT INTO runs (issue_id, issue_identifier, attempt, workspace_path, prompt, parent, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'preparing_workspace')
     `);
     this.stmtUpdateRunStatus = this.db.prepare(`
       UPDATE runs SET status = ?, error = ? WHERE id = ?
     `);
     this.stmtFinishRun = this.db.prepare(`
-      UPDATE runs SET status = ?, exit_code = ?, error = ?,
+      UPDATE runs SET status = ?, exit_code = ?, error = ?, hook_output = ?,
         finished_at = datetime('now'),
         duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
       WHERE id = ?
     `);
     const runColumns = `id, issue_id AS issueId, issue_identifier AS issueIdentifier, attempt,
-             workspace_path AS workspacePath, prompt, started_at AS startedAt, finished_at AS finishedAt,
-             status, error, exit_code AS exitCode, duration_ms AS durationMs`;
+             workspace_path AS workspacePath, prompt, parent, started_at AS startedAt, finished_at AS finishedAt,
+             status, error, hook_output AS hookOutput, exit_code AS exitCode, duration_ms AS durationMs`;
     this.stmtGetActiveRuns = this.db.prepare(`
       SELECT ${runColumns} FROM runs WHERE status IN ('preparing_workspace', 'building_prompt', 'launching_agent', 'running')
     `);
@@ -170,8 +178,16 @@ export class StateStore {
     attempt: number,
     workspacePath: string,
     prompt: string | null = null,
+    parent: string | null = null,
   ): number {
-    const result = this.stmtCreateRun.run(issueId, issueIdentifier, attempt, workspacePath, prompt);
+    const result = this.stmtCreateRun.run(
+      issueId,
+      issueIdentifier,
+      attempt,
+      workspacePath,
+      prompt,
+      parent,
+    );
     return Number(result.lastInsertRowid);
   }
 
@@ -179,8 +195,14 @@ export class StateStore {
     this.stmtUpdateRunStatus.run(status, error ?? null, runId);
   }
 
-  finishRun(runId: number, status: RunStatus, exitCode?: number | null, error?: string): void {
-    this.stmtFinishRun.run(status, exitCode ?? null, error ?? null, runId);
+  finishRun(
+    runId: number,
+    status: RunStatus,
+    exitCode?: number | null,
+    error?: string,
+    hookOutput?: string | null,
+  ): void {
+    this.stmtFinishRun.run(status, exitCode ?? null, error ?? null, hookOutput ?? null, runId);
   }
 
   getActiveRuns(): RunRecord[] {
@@ -189,6 +211,21 @@ export class StateStore {
 
   getRunsForIssue(issueId: string): RunRecord[] {
     return this.stmtGetRunsForIssue.all(issueId) as RunRecord[];
+  }
+
+  /**
+   * Returns the error strings from the last N failed runs for an issue,
+   * most recent first. Used for stuck-loop detection.
+   */
+  getRecentErrors(issueId: string, limit: number = 3): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT error FROM runs
+         WHERE issue_id = ? AND status = 'failed' AND error IS NOT NULL
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(issueId, limit) as { error: string }[];
+    return rows.map((r) => r.error);
   }
 
   getLatestRun(issueId: string): RunRecord | undefined {

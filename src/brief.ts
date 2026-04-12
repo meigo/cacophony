@@ -10,8 +10,25 @@ const liquid = new Liquid({ strictVariables: false, strictFilters: true });
 
 export type BriefMessage = { role: 'user' | 'assistant'; content: string };
 
-export type BriefReady = { status: 'ready'; title: string; prompt: string };
-export type BriefClarify = { status: 'clarify'; questions: string[] };
+export type BriefReady = {
+  status: 'ready';
+  title: string;
+  prompt: string;
+  /** Frameworks/engines the brief agent detected from the user's prompt. */
+  frameworks?: string[];
+  /** Suggested verification hooks based on the detected tech stack. */
+  suggestedHooks?: { after_run?: string };
+};
+
+/**
+ * A single clarification question. `options` is an enumerated list of 2-4
+ * short, mutually exclusive answers the user can pick from. The dashboard
+ * renders these as radio buttons plus a "Other..." text field as an escape
+ * hatch for cases the options don't cover. An empty `options` array means
+ * "genuinely free-form — no sensible enumeration exists".
+ */
+export type BriefQuestion = { question: string; options: string[] };
+export type BriefClarify = { status: 'clarify'; questions: BriefQuestion[] };
 export type BriefResult = BriefReady | BriefClarify;
 
 export interface RunBriefOpts {
@@ -41,10 +58,25 @@ Current round: {{ round }} of {{ max_rounds }}.
 Your job: decide whether this task is clear enough for a coding agent to execute autonomously with no further human input.
 
 - If YES, respond with ONLY this JSON (no markdown, no commentary, no code fences):
-{"status":"ready","title":"<short human title, max 60 chars>","prompt":"<refined prompt with explicit scope, constraints, acceptance criteria>"}
+{"status":"ready","title":"<short human title, max 60 chars>","prompt":"<refined prompt with explicit scope, constraints, acceptance criteria>","frameworks":["<framework-or-engine-id if any>"]}
 
-- If NO, ask up to 3 short, focused clarifying questions as ONLY this JSON:
-{"status":"clarify","questions":["<q1>","<q2>","<q3>"]}
+The "frameworks" array should list any specific game engine or framework the task targets, using lowercase identifiers: "defold", "godot", "unity", "unreal", "nextjs", "sveltekit", "astro", "flutter", etc. Omit the field or use an empty array if no specific framework is involved (e.g. a plain CLI tool, a vanilla HTML page, or a generic library).
+
+The "suggestedHooks" object should contain an "after_run" shell command that verifies the project builds and passes tests for the detected stack. Choose the standard tools for the framework — for example:
+- SvelteKit: "npx svelte-check && npx vitest run && npx biome check ."
+- Next.js: "npm run build && npm run lint"
+- Astro: "npm run build && npm run check"
+- Rust: "cargo build && cargo test && cargo clippy"
+- Go: "go build ./... && go test ./... && go vet ./..."
+- Python: "pytest && ruff check ."
+- Defold: "java -jar bob.jar build"
+- Generic Node.js: "npm run build && npm test"
+Omit suggestedHooks if no specific verification is needed or if the stack is unknown.
+
+- If NO, ask up to 3 short, focused clarifying questions, EACH with 2-4 short, mutually exclusive options the user can pick from. Prefer clickable options over free-form questions — users will click faster than they can type. Return ONLY this JSON:
+{"status":"clarify","questions":[{"question":"<q1>","options":["<opt1>","<opt2>","<opt3>"]},{"question":"<q2>","options":["<optA>","<optB>"]}]}
+
+If a question genuinely has no enumerable answer (e.g. "what is the project name?") use an empty options array: {"question":"<q>","options":[]}. The dashboard will show a plain text field in that case. Prefer this only when listing options would be nonsense, not as a lazy fallback.
 
 {% if round >= max_rounds -%}
 You have hit max_rounds — you MUST return "ready" this round. Commit to the best interpretation you can.
@@ -133,16 +165,53 @@ export function validateBriefResult(parsed: unknown): BriefResult | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
   if (obj.status === 'ready' && typeof obj.title === 'string' && typeof obj.prompt === 'string') {
+    const frameworks = Array.isArray(obj.frameworks)
+      ? (obj.frameworks as unknown[])
+          .filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+          .map((f) => f.trim().toLowerCase())
+      : [];
+    // Extract suggested verification hooks (after_run command for the project's stack)
+    let suggestedHooks: { after_run?: string } | undefined;
+    if (obj.suggestedHooks && typeof obj.suggestedHooks === 'object') {
+      const sh = obj.suggestedHooks as Record<string, unknown>;
+      if (typeof sh.after_run === 'string' && sh.after_run.trim().length > 0) {
+        suggestedHooks = { after_run: sh.after_run.trim() };
+      }
+    }
     return {
       status: 'ready',
       title: obj.title.slice(0, 80).trim() || 'task',
       prompt: obj.prompt.trim(),
+      ...(frameworks.length > 0 ? { frameworks } : {}),
+      ...(suggestedHooks ? { suggestedHooks } : {}),
     };
   }
   if (obj.status === 'clarify' && Array.isArray(obj.questions)) {
-    const questions = (obj.questions as unknown[])
-      .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
-      .slice(0, 3);
+    // Accept both the structured shape {question, options} and the legacy
+    // plain-string shape. A plain-string question upgrades to an empty
+    // options array (free-form text only in the UI).
+    const normalized: BriefQuestion[] = [];
+    for (const raw of obj.questions as unknown[]) {
+      if (typeof raw === 'string') {
+        const text = raw.trim();
+        if (text.length > 0) normalized.push({ question: text, options: [] });
+        continue;
+      }
+      if (raw && typeof raw === 'object') {
+        const q = raw as Record<string, unknown>;
+        if (typeof q.question !== 'string') continue;
+        const text = q.question.trim();
+        if (text.length === 0) continue;
+        const options = Array.isArray(q.options)
+          ? (q.options as unknown[])
+              .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
+              .map((o) => o.trim())
+              .slice(0, 4)
+          : [];
+        normalized.push({ question: text, options });
+      }
+    }
+    const questions = normalized.slice(0, 3);
     if (questions.length === 0) return null;
     return { status: 'clarify', questions };
   }

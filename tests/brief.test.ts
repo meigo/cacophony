@@ -75,26 +75,152 @@ describe('validateBriefResult', () => {
     });
   });
 
-  it('accepts a well-formed clarify result and caps at 3 questions', () => {
+  it('accepts a ready result with detected frameworks', () => {
+    const r = validateBriefResult({
+      status: 'ready',
+      title: 'Tetris',
+      prompt: 'Build Tetris in Defold',
+      frameworks: ['Defold', 'Lua'],
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r.frameworks).toEqual(['defold', 'lua']);
+  });
+
+  it('omits frameworks field when empty or absent', () => {
+    const r1 = validateBriefResult({
+      status: 'ready',
+      title: 't',
+      prompt: 'p',
+      frameworks: [],
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r1.frameworks).toBeUndefined();
+
+    const r2 = validateBriefResult({
+      status: 'ready',
+      title: 't',
+      prompt: 'p',
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r2.frameworks).toBeUndefined();
+  });
+
+  it('accepts suggestedHooks with after_run command', () => {
+    const r = validateBriefResult({
+      status: 'ready',
+      title: 'SvelteKit app',
+      prompt: 'Build a todo app',
+      frameworks: ['sveltekit'],
+      suggestedHooks: { after_run: 'npx svelte-check && npx vitest run' },
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r.suggestedHooks).toEqual({ after_run: 'npx svelte-check && npx vitest run' });
+  });
+
+  it('omits suggestedHooks when absent or empty', () => {
+    const r = validateBriefResult({
+      status: 'ready',
+      title: 't',
+      prompt: 'p',
+      suggestedHooks: { after_run: '' },
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r.suggestedHooks).toBeUndefined();
+  });
+
+  it('filters out invalid framework entries', () => {
+    const r = validateBriefResult({
+      status: 'ready',
+      title: 't',
+      prompt: 'p',
+      frameworks: ['defold', '', 42, null, 'godot'],
+    }) as Extract<BriefResult, { status: 'ready' }>;
+    expect(r.frameworks).toEqual(['defold', 'godot']);
+  });
+
+  it('accepts a well-formed structured clarify result and caps at 3 questions', () => {
     const r = validateBriefResult({
       status: 'clarify',
-      questions: ['one', 'two', 'three', 'four', 'five'],
+      questions: [
+        { question: 'one', options: ['a', 'b'] },
+        { question: 'two', options: ['c', 'd'] },
+        { question: 'three', options: [] },
+        { question: 'four', options: ['e'] },
+        { question: 'five', options: [] },
+      ],
     }) as Exclude<BriefResult, { status: 'ready' }>;
     expect(r.status).toBe('clarify');
     expect(r.questions).toHaveLength(3);
-    expect(r.questions).toEqual(['one', 'two', 'three']);
+    expect(r.questions).toEqual([
+      { question: 'one', options: ['a', 'b'] },
+      { question: 'two', options: ['c', 'd'] },
+      { question: 'three', options: [] },
+    ]);
   });
 
-  it('drops empty-string questions from clarify', () => {
+  it('caps options per question at 4', () => {
     const r = validateBriefResult({
       status: 'clarify',
-      questions: ['real', '', '  '],
-    });
-    expect(r).toEqual({ status: 'clarify', questions: ['real'] });
+      questions: [{ question: 'q', options: ['a', 'b', 'c', 'd', 'e', 'f'] }],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions[0].options).toHaveLength(4);
+    expect(r.questions[0].options).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('drops empty-string options', () => {
+    const r = validateBriefResult({
+      status: 'clarify',
+      questions: [{ question: 'q', options: ['real', '', '  ', 'also-real'] }],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions[0].options).toEqual(['real', 'also-real']);
+  });
+
+  it('upgrades legacy plain-string questions to empty-options structured form', () => {
+    const r = validateBriefResult({
+      status: 'clarify',
+      questions: ['legacy', 'also legacy'],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions).toEqual([
+      { question: 'legacy', options: [] },
+      { question: 'also legacy', options: [] },
+    ]);
+  });
+
+  it('accepts mixed legacy-string and structured questions', () => {
+    const r = validateBriefResult({
+      status: 'clarify',
+      questions: ['plain string q', { question: 'structured q', options: ['x', 'y'] }],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions).toHaveLength(2);
+    expect(r.questions[0]).toEqual({ question: 'plain string q', options: [] });
+    expect(r.questions[1]).toEqual({ question: 'structured q', options: ['x', 'y'] });
+  });
+
+  it('drops questions with missing or empty question text', () => {
+    const r = validateBriefResult({
+      status: 'clarify',
+      questions: [
+        '',
+        '  ',
+        { options: ['x'] }, // missing question
+        { question: '', options: ['x'] },
+        { question: 'real', options: ['x'] },
+      ],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions).toEqual([{ question: 'real', options: ['x'] }]);
   });
 
   it('rejects clarify with zero valid questions', () => {
     expect(validateBriefResult({ status: 'clarify', questions: ['', '  '] })).toBeNull();
+    expect(validateBriefResult({ status: 'clarify', questions: [] })).toBeNull();
+  });
+
+  it('defaults options to empty array if missing or non-array', () => {
+    const r = validateBriefResult({
+      status: 'clarify',
+      questions: [
+        { question: 'no options field' },
+        { question: 'null options', options: null },
+        { question: 'string options', options: 'nope' },
+      ],
+    }) as Exclude<BriefResult, { status: 'ready' }>;
+    expect(r.questions).toHaveLength(3);
+    expect(r.questions.every((q) => Array.isArray(q.options) && q.options.length === 0)).toBe(true);
   });
 
   it('rejects unknown status', () => {
@@ -162,8 +288,10 @@ describe('runBrief (with fake agent)', () => {
     });
   });
 
-  it('returns clarify questions when the agent asks for them', async () => {
-    writeFakeAgent(`echo '{"status":"clarify","questions":["which module?","sync or async?"]}'`);
+  it('returns structured clarify questions when the agent asks for them', async () => {
+    writeFakeAgent(
+      `echo '{"status":"clarify","questions":[{"question":"which module?","options":["auth","billing","api"]},{"question":"sync or async?","options":["sync","async"]}]}'`,
+    );
     const result = await runBrief({
       transcript: [{ role: 'user', content: 'fix the bug' }],
       round: 1,
@@ -175,7 +303,30 @@ describe('runBrief (with fake agent)', () => {
     });
     expect(result.status).toBe('clarify');
     if (result.status === 'clarify') {
-      expect(result.questions).toEqual(['which module?', 'sync or async?']);
+      expect(result.questions).toEqual([
+        { question: 'which module?', options: ['auth', 'billing', 'api'] },
+        { question: 'sync or async?', options: ['sync', 'async'] },
+      ]);
+    }
+  });
+
+  it('upgrades legacy plain-string questions from an older agent gracefully', async () => {
+    writeFakeAgent(`echo '{"status":"clarify","questions":["legacy q1","legacy q2"]}'`);
+    const result = await runBrief({
+      transcript: [{ role: 'user', content: 'fix something' }],
+      round: 1,
+      maxRounds: 3,
+      agent: { ...baseAgent, command: fakeAgent },
+      projectRoot: dir,
+      timeoutMs: 5000,
+      logger,
+    });
+    expect(result.status).toBe('clarify');
+    if (result.status === 'clarify') {
+      expect(result.questions).toEqual([
+        { question: 'legacy q1', options: [] },
+        { question: 'legacy q2', options: [] },
+      ]);
     }
   });
 

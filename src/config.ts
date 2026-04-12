@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import chokidar, { type FSWatcher } from 'chokidar';
 import type {
   WorkflowDefinition,
@@ -160,6 +160,10 @@ export class ConfigManager {
     this.logger = logger;
   }
 
+  getFilePath(): string {
+    return this.filePath;
+  }
+
   load(): WorkflowDefinition {
     const wf = loadWorkflow(this.filePath);
     const errors = validateConfig(wf.config);
@@ -223,4 +227,35 @@ export class ConfigManager {
       return false;
     }
   }
+}
+
+/**
+ * Safely update the hooks block in a config.md file without clobbering
+ * the rest of the YAML front matter or the prompt template body.
+ * Merges the provided hooks into the existing hooks (if any).
+ */
+export function updateConfigHooks(
+  filePath: string,
+  hooks: { after_run?: string; after_create?: string },
+): void {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  if (!raw.startsWith('---')) {
+    throw new Error('config file has no YAML front matter');
+  }
+  const endIdx = raw.indexOf('---', 3);
+  if (endIdx === -1) {
+    throw new Error('config file: unclosed YAML front matter');
+  }
+  const yamlStr = raw.slice(3, endIdx);
+  const body = raw.slice(endIdx + 3);
+  const parsed = (parseYaml(yamlStr) ?? {}) as Record<string, unknown>;
+
+  // Merge hooks — preserve existing values, add new ones
+  const existing = (parsed.hooks ?? {}) as Record<string, unknown>;
+  if (hooks.after_run) existing.after_run = hooks.after_run;
+  if (hooks.after_create) existing.after_create = hooks.after_create;
+  parsed.hooks = existing;
+
+  const newYaml = stringifyYaml(parsed, { lineWidth: 0 });
+  fs.writeFileSync(filePath, `---\n${newYaml}---${body}`, 'utf-8');
 }

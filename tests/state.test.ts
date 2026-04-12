@@ -339,4 +339,91 @@ describe('StateStore', () => {
       expect(runs.find((r) => r.id === id)?.prompt).toBeNull();
     });
   });
+
+  describe('getRecentErrors', () => {
+    it('returns the last N failed error strings for an issue', () => {
+      const id1 = store.createRun('issue-1', 'task-a', 0, '/ws');
+      store.finishRun(id1, 'failed', 1, 'error alpha');
+      const id2 = store.createRun('issue-1', 'task-a', 1, '/ws');
+      store.finishRun(id2, 'failed', 1, 'error beta');
+      const id3 = store.createRun('issue-1', 'task-a', 2, '/ws');
+      store.finishRun(id3, 'failed', 1, 'error gamma');
+
+      const errors = store.getRecentErrors('issue-1', 3);
+      expect(errors).toEqual(['error gamma', 'error beta', 'error alpha']);
+    });
+
+    it('only returns failed runs, not succeeded or timed_out', () => {
+      const id1 = store.createRun('issue-2', 'task-b', 0, '/ws');
+      store.finishRun(id1, 'succeeded', 0);
+      const id2 = store.createRun('issue-2', 'task-b', 1, '/ws');
+      store.finishRun(id2, 'failed', 1, 'the real error');
+      const id3 = store.createRun('issue-2', 'task-b', 2, '/ws');
+      store.finishRun(id3, 'timed_out', null, 'timeout');
+
+      const errors = store.getRecentErrors('issue-2', 3);
+      expect(errors).toEqual(['the real error']);
+    });
+
+    it('detects stuck loop when all recent errors are identical', () => {
+      const same = 'after_run failed: vite.config.ts test property not found';
+      for (let i = 0; i < 5; i++) {
+        const id = store.createRun('issue-3', 'task-c', i, '/ws');
+        store.finishRun(id, 'failed', 1, same);
+      }
+
+      const errors = store.getRecentErrors('issue-3', 3);
+      expect(errors.length).toBe(3);
+      expect(errors.every((e) => e === errors[0])).toBe(true);
+    });
+  });
+
+  describe('parent column', () => {
+    it('stores and returns parent on createRun', () => {
+      const id = store.createRun(
+        'child-id',
+        'child-task',
+        0,
+        '/ws',
+        'do the child thing',
+        'parent-task',
+      );
+      const runs = store.getRunsForIssue('child-id');
+      const found = runs.find((r) => r.id === id);
+      expect(found?.parent).toBe('parent-task');
+    });
+
+    it('persists null when no parent is provided', () => {
+      const id = store.createRun('top-id', 'top-task', 0, '/ws', 'top-level work');
+      const runs = store.getRunsForIssue('top-id');
+      expect(runs.find((r) => r.id === id)?.parent).toBeNull();
+    });
+  });
+
+  describe('hook_output column', () => {
+    it('stores after_run hook output on finishRun and reads it back', () => {
+      const id = store.createRun('issue-1', 'task-a', 0, '/ws');
+      const output = 'npm ERR! test failed\n  expected 3, got 2\n';
+      store.finishRun(id, 'failed', 1, 'after_run failed: see output', output);
+
+      const runs = store.getRunsForIssue('issue-1');
+      const found = runs.find((r) => r.id === id);
+      expect(found?.hookOutput).toBe(output);
+      expect(found?.status).toBe('failed');
+    });
+
+    it('persists null when no hook output is provided', () => {
+      const id = store.createRun('issue-1', 'task-a', 0, '/ws');
+      store.finishRun(id, 'succeeded', 0);
+      const runs = store.getRunsForIssue('issue-1');
+      expect(runs.find((r) => r.id === id)?.hookOutput).toBeNull();
+    });
+
+    it('stores output even on successful runs (for inspection)', () => {
+      const id = store.createRun('issue-1', 'task-a', 0, '/ws');
+      store.finishRun(id, 'succeeded', 0, undefined, 'all tests passed\n');
+      const runs = store.getRunsForIssue('issue-1');
+      expect(runs.find((r) => r.id === id)?.hookOutput).toBe('all tests passed\n');
+    });
+  });
 });

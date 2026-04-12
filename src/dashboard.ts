@@ -4,96 +4,147 @@ export function dashboardHtml(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cacophony</title>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
-<style>
-  :root {
-    --bg: #0d1117;
-    --bg-elev: #161b22;
-    --bg-hover: #1c2129;
-    --border: #21262d;
-    --border-strong: #30363d;
-    --text: #c9d1d9;
-    --text-dim: #8b949e;
-    --text-faint: #484f58;
-    --accent: #58a6ff;
-    --green: #3fb950;
-    --yellow: #d29922;
-    --red: #f85149;
-    --purple: #bc8cff;
+<script>
+  // Apply saved theme synchronously before Alpine loads so there's no flash.
+  try {
+    var t = localStorage.getItem('caco.theme');
+    document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+  } catch (e) {
+    document.documentElement.dataset.theme = 'dark';
   }
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ----- Palette: grayscale only, flat, sharp edges ------------------------
+     Accent colors (red / green) are used ONLY on indicator badges:
+       connection dot, run status pills, running/failed counters,
+       running task border, and the state dot on a running task.
+     Everything else — text, borders, buttons, inputs — stays grayscale.   */
+
+  :root {
+    --bg: #000000;
+    --bg-elev: #0a0a0a;
+    --bg-hover: #141414;
+    --border: #1f1f1f;
+    --border-strong: #333333;
+    --text: #ffffff;
+    --text-dim: #888888;
+    --text-faint: #555555;
+    --green: #22c55e;
+    --red: #ef4444;
+    --modal-backdrop: rgba(0, 0, 0, 0.75);
+    color-scheme: dark;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --bg-elev: #fafafa;
+    --bg-hover: #f0f0f0;
+    --border: #e5e5e5;
+    --border-strong: #cccccc;
+    --text: #000000;
+    --text-dim: #666666;
+    --text-faint: #999999;
+    --green: #15803d;
+    --red: #b91c1c;
+    --modal-backdrop: rgba(0, 0, 0, 0.35);
+    color-scheme: light;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; font-size: 14px; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    font-feature-settings: "calt" 1, "liga" 1;
+  }
   body { max-width: 1100px; margin: 0 auto; padding: 1.5rem; min-height: 100vh; }
   button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
   input, textarea, select { font: inherit; color: inherit; }
+  a { color: var(--text); }
 
   /* Header */
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
-  h1 { font-size: 1.3rem; color: var(--accent); letter-spacing: -0.02em; }
+  h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); letter-spacing: 0.02em; text-transform: uppercase; }
   h1 .tracker-badge {
-    font-size: 0.65rem; font-weight: 500; color: var(--text-dim); text-transform: uppercase;
+    font-size: 0.65rem; font-weight: 500; color: var(--text-dim); text-transform: lowercase;
     margin-left: 0.5rem; padding: 2px 8px; background: var(--bg-elev); border: 1px solid var(--border);
-    border-radius: 10px; letter-spacing: 0.05em;
+    letter-spacing: 0.05em;
   }
+  .header-right { display: flex; align-items: center; gap: 0.5rem; }
+  .theme-toggle {
+    padding: 4px 10px; font-size: 0.7rem; font-weight: 500; color: var(--text-dim);
+    background: var(--bg-elev); border: 1px solid var(--border); text-transform: lowercase;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
   .conn {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 600;
-    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 4px 10px; font-size: 0.7rem; font-weight: 600;
+    background: var(--bg-elev); border: 1px solid var(--border); text-transform: lowercase;
   }
-  .conn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
-  .conn.live .conn-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .conn-dot { width: 6px; height: 6px; background: var(--text-faint); }
+  .conn.live .conn-dot { background: var(--green); }
   .conn.dead .conn-dot { background: var(--red); }
 
   /* Stats */
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-bottom: 1.5rem; }
   .stat {
-    background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-elev); border: 1px solid var(--border);
     padding: 0.75rem 1rem;
   }
   .stat-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat-value { font-size: 1.6rem; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .stat-value.running { color: var(--green); }
+  .stat-value.failed { color: var(--red); }
 
   /* Create task */
   .creator {
-    background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-elev); border: 1px solid var(--border);
     padding: 0.75rem; margin-bottom: 1.5rem;
   }
   .creator-row { display: flex; gap: 0.5rem; align-items: center; }
   .creator input[type="text"] {
-    flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
     padding: 8px 12px; color: var(--text);
   }
-  .creator input:focus, .creator textarea:focus, .creator select:focus { outline: none; border-color: var(--accent); }
+  .creator input:focus, .creator textarea:focus, .creator select:focus {
+    outline: none; border-color: var(--text);
+  }
   .creator select {
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
     padding: 8px 10px; color: var(--text);
   }
   .creator textarea {
     display: block; width: 100%; min-height: 60px; resize: vertical; font-family: inherit;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 12px; color: var(--text); margin-top: 0.5rem;
+    background: var(--bg); border: 1px solid var(--border);
+    padding: 8px 12px; color: var(--text); margin-bottom: 0.5rem;
   }
   .creator-expand { margin-top: 0.5rem; display: flex; gap: 0.5rem; align-items: center; }
 
   /* Filter tabs */
-  .filters { display: flex; gap: 2px; margin-bottom: 1rem; border-bottom: 1px solid var(--border); }
+  .filters { display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 1px solid var(--border); }
   .filter-btn {
-    padding: 8px 16px; font-size: 0.85rem; font-weight: 500; color: var(--text-dim);
-    border-bottom: 2px solid transparent; transition: all 0.15s;
+    padding: 8px 16px; font-size: 0.8rem; font-weight: 500; color: var(--text-dim);
+    border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+    text-transform: lowercase;
   }
   .filter-btn:hover { color: var(--text); }
-  .filter-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .filter-btn.active { color: var(--text); border-bottom-color: var(--text); }
   .filter-btn .count {
-    margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: var(--bg-elev);
-    font-size: 0.7rem; font-variant-numeric: tabular-nums;
+    margin-left: 6px; padding: 1px 6px; background: var(--bg-elev); border: 1px solid var(--border);
+    font-size: 0.7rem; font-variant-numeric: tabular-nums; color: var(--text-dim);
   }
   .filter-spacer { flex: 1; }
   .search {
-    background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 10px; color: var(--text); font-size: 0.8rem; width: 200px;
-    margin-bottom: 4px;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 6px 10px; color: var(--text); font-size: 0.75rem; width: 200px;
+    margin-bottom: 4px; font-family: inherit;
   }
-  .search:focus { outline: none; border-color: var(--accent); }
+  .search:focus { outline: none; border-color: var(--text); }
 
   /* Section headers */
   .section-head {
@@ -104,156 +155,243 @@ export function dashboardHtml(): string {
   }
   .section-head .count { color: var(--text-faint); }
 
-  /* Task cards */
-  .task-list { display: flex; flex-direction: column; gap: 4px; }
+  /* Task rows */
+  .task-list { display: flex; flex-direction: column; gap: 2px; }
   .task {
     display: flex; align-items: center; gap: 0.75rem;
-    padding: 0.7rem 0.9rem; border-radius: 6px;
+    padding: 0.7rem 0.9rem;
     background: var(--bg-elev); border: 1px solid var(--border);
-    transition: all 0.15s; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s; cursor: pointer;
   }
   .task:hover { background: var(--bg-hover); border-color: var(--border-strong); }
-  .task.done { opacity: 0.55; }
+  .task.done { opacity: 0.5; }
   .task.running { border-color: var(--green); }
-  .task.failed { border-color: var(--red); }
-  .task .state-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-  .task .state-dot.todo { background: var(--accent); }
-  .task .state-dot.in-progress { background: var(--yellow); }
-  .task .state-dot.done { background: var(--green); }
+  /* .failed intentionally does NOT get a border — the red state dot is enough. */
+  .task .state-dot { width: 8px; height: 8px; flex-shrink: 0; background: var(--text-faint); }
+  .task .state-dot.todo { background: var(--text-dim); }
+  .task .state-dot.in-progress { background: var(--text); }
+  .task .state-dot.done { background: var(--text-faint); }
   .task .state-dot.cancelled,
   .task .state-dot.wontfix { background: var(--text-faint); }
   .task .state-dot.running {
-    background: var(--green); box-shadow: 0 0 0 0 var(--green);
-    animation: pulse 2s infinite;
+    background: var(--green); animation: pulse 2s infinite;
   }
+  .task.failed .state-dot { background: var(--red); }
   @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
-    70% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
-    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
-  }
-  .task-id {
-    font-family: ui-monospace, monospace; font-size: 0.75rem; font-weight: 600;
-    color: var(--text-dim); min-width: 90px; flex-shrink: 0;
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
   .task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task-meta { font-size: 0.7rem; color: var(--text-faint); white-space: nowrap; }
-  .priority-badge {
-    font-family: ui-monospace, monospace; font-size: 0.65rem; font-weight: 700;
-    padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--text-dim);
-    border: 1px solid var(--border);
+  .blocked-tag {
+    font-size: 0.65rem; font-weight: 600; color: var(--text-dim);
+    padding: 1px 6px; background: var(--bg); border: 1px solid var(--border);
+    text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .priority-badge.p1 { color: var(--red); border-color: var(--red); }
-  .priority-badge.p2 { color: var(--yellow); border-color: var(--yellow); }
-  .priority-badge.p3 { color: var(--accent); }
-  .blockers-icon { color: var(--yellow); font-size: 0.7rem; }
-  .task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+  .task-actions {
+    display: flex; gap: 4px; opacity: 0.4;
+    transition: opacity 0.15s;
+  }
   .task:hover .task-actions { opacity: 1; }
   .icon-btn {
-    width: 24px; height: 24px; border-radius: 4px; display: inline-flex;
+    width: 24px; height: 24px; display: inline-flex;
     align-items: center; justify-content: center; font-size: 12px;
-    color: var(--text-dim); transition: all 0.15s;
+    color: var(--text-dim); transition: background 0.15s, color 0.15s;
+    border: 1px solid transparent;
   }
-  .icon-btn:hover { background: var(--border); color: var(--text); }
-  .icon-btn.danger:hover { background: var(--red); color: #fff; }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border); }
+  .icon-btn.danger:hover { color: var(--red); border-color: var(--red); background: var(--bg); }
 
   /* Empty states */
   .empty {
     text-align: center; padding: 2rem 1rem; color: var(--text-faint);
-    background: var(--bg-elev); border: 1px dashed var(--border); border-radius: 8px;
-    font-size: 0.85rem;
+    background: var(--bg-elev); border: 1px dashed var(--border);
+    font-size: 0.8rem;
   }
-  .empty strong { color: var(--text-dim); display: block; margin-bottom: 0.25rem; }
+  .empty strong { color: var(--text-dim); display: block; margin-bottom: 0.25rem; font-weight: 600; }
 
   /* Modal */
   .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    position: fixed; inset: 0; background: var(--modal-backdrop);
     display: flex; align-items: center; justify-content: center; padding: 2rem;
-    z-index: 100; backdrop-filter: blur(4px);
+    z-index: 100;
   }
   .modal {
-    background: var(--bg-elev); border: 1px solid var(--border-strong);
-    border-radius: 12px; width: 100%; max-width: 720px; max-height: 90vh;
+    background: var(--bg); border: 1px solid var(--border-strong);
+    width: 100%; max-width: 720px; max-height: 90vh;
     display: flex; flex-direction: column; overflow: hidden;
   }
   .modal-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
   }
-  .modal-title { font-size: 1rem; font-weight: 600; }
-  .modal-id { font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--text-dim); }
+  .modal-title { font-size: 0.95rem; font-weight: 600; }
+  .modal-id { font-size: 0.75rem; color: var(--text-dim); }
   .modal-body { padding: 1.25rem; overflow-y: auto; flex: 1; }
   .modal-section { margin-bottom: 1.25rem; }
-  .modal-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; }
+  .modal-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; font-weight: 600; }
   .modal-desc {
-    white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    white-space: pre-wrap; font-size: 0.8rem; line-height: 1.55;
+    background: var(--bg-elev); border: 1px solid var(--border);
     padding: 0.75rem 1rem; color: var(--text-dim);
     max-height: 300px; overflow-y: auto;
   }
   .modal-desc:empty::before { content: "No description"; color: var(--text-faint); font-style: italic; }
   .modal-foot {
     display: flex; gap: 0.5rem; justify-content: flex-end;
-    padding: 1rem 1.25rem; border-top: 1px solid var(--border); background: var(--bg);
+    padding: 1rem 1.25rem; border-top: 1px solid var(--border); background: var(--bg-elev);
   }
   .btn {
-    padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 500;
+    padding: 6px 14px; font-size: 0.75rem; font-weight: 500;
     background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    text-transform: lowercase; font-family: inherit;
   }
-  .btn:hover { background: var(--border); }
-  .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-  .btn.primary:hover { background: #388bfd; }
-  .btn.danger { color: var(--red); border-color: var(--red); }
-  .btn.danger:hover { background: var(--red); color: #fff; }
+  .btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 600; }
+  .btn.primary:hover { background: var(--text-dim); border-color: var(--text-dim); }
+  .btn.danger { color: var(--text-dim); border-color: var(--border); }
+  .btn.danger:hover { color: var(--red); border-color: var(--red); background: var(--bg); }
 
   /* Run history */
-  .run-list { display: flex; flex-direction: column; gap: 4px; }
+  .run-list { display: flex; flex-direction: column; gap: 2px; }
   .run-item {
     display: flex; align-items: center; gap: 0.75rem;
-    padding: 0.5rem 0.75rem; border-radius: 6px;
-    background: var(--bg); border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-elev); border: 1px solid var(--border);
     font-size: 0.75rem;
   }
   .run-item .status {
-    font-weight: 600; padding: 1px 8px; border-radius: 10px;
-    text-transform: capitalize;
+    font-weight: 700; padding: 1px 8px; font-size: 0.65rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    border: 1px solid var(--border);
   }
-  .run-item .status.succeeded { background: rgba(63,185,80,0.15); color: var(--green); }
-  .run-item .status.running { background: rgba(63,185,80,0.15); color: var(--green); }
-  .run-item .status.failed { background: rgba(248,81,73,0.15); color: var(--red); }
-  .run-item .status.timed_out { background: rgba(210,153,34,0.15); color: var(--yellow); }
-  .run-item .status.canceled { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .run-item .status.succeeded,
+  .run-item .status.running { color: var(--green); border-color: var(--green); }
+  .run-item .status.failed,
+  .run-item .status.timed_out { color: var(--red); border-color: var(--red); }
+  .run-item .status.canceled { color: var(--text-dim); border-color: var(--border-strong); }
   .run-meta { color: var(--text-faint); margin-left: auto; font-variant-numeric: tabular-nums; }
   .run-error {
-    font-family: ui-monospace, monospace; font-size: 0.7rem; color: var(--red);
-    margin-top: 4px; padding: 4px 8px; background: rgba(248,81,73,0.08); border-radius: 4px;
+    font-size: 0.7rem; color: var(--text);
+    margin-top: 4px; padding: 6px 10px;
+    background: var(--bg); border: 1px solid var(--red); border-left-width: 3px;
     white-space: pre-wrap; word-break: break-word;
   }
+  .run-hook-output { margin-top: 4px; font-size: 0.75rem; }
+  .run-hook-output summary {
+    cursor: pointer; color: var(--text-dim); padding: 2px 0;
+  }
+  .run-hook-output summary:hover { color: var(--text); }
+  .run-hook-output pre {
+    margin-top: 4px; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    font-size: 0.7rem;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow-y: auto;
+    color: var(--text);
+  }
 
-  /* Running/retry badges in section */
-  .running-banner {
-    background: var(--bg-elev); border: 1px solid var(--green); border-radius: 8px;
-    padding: 0.75rem 1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem;
+  /* Brief clarification questions */
+  .brief-question {
+    margin-bottom: 1rem; padding: 0.75rem;
+    background: var(--bg-elev); border: 1px solid var(--border);
   }
-  .running-banner .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
-  .running-banner-label { font-size: 0.7rem; font-weight: 600; color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; }
-  .running-banner-items { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
-  .running-banner-item {
+  .brief-question:last-child { margin-bottom: 0; }
+  .brief-q-text {
+    font-size: 0.85rem; font-weight: 600; color: var(--text);
+    margin-bottom: 0.5rem;
+  }
+  .brief-option {
     display: flex; align-items: center; gap: 0.5rem;
-    padding: 4px 10px; background: var(--bg); border-radius: 12px;
-    font-size: 0.75rem; border: 1px solid var(--border);
+    padding: 4px 6px; cursor: pointer;
+    font-size: 0.8rem; color: var(--text);
   }
-  .running-banner-item .id { font-family: ui-monospace, monospace; font-weight: 600; color: var(--green); }
+  .brief-option:hover { background: var(--bg-hover); }
+  .brief-option input[type="radio"] {
+    margin: 0; accent-color: var(--text);
+  }
+  .brief-option-other input[type="text"] {
+    flex: 1; margin-left: 0.5rem; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); font-family: inherit; font-size: 0.8rem;
+  }
+  .brief-option-other input[type="text"]:disabled { opacity: 0.4; }
+  .brief-option-other input[type="text"]:focus { outline: none; border-color: var(--text); }
+  .brief-free-input {
+    display: block; width: 100%; padding: 6px 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); font-family: inherit; font-size: 0.8rem;
+  }
+  .brief-free-input:focus { outline: none; border-color: var(--text); }
+
+  /* Brief "your answers" read-only summary shown while refining */
+  .brief-summary-row {
+    display: flex; gap: 0.75rem; align-items: flex-start;
+    padding: 0.6rem 0.75rem; margin-bottom: 2px;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    font-size: 0.8rem;
+  }
+  .brief-summary-q {
+    flex: 0 0 40%; color: var(--text-dim); font-weight: 500;
+  }
+  .brief-summary-a {
+    flex: 1; color: var(--text); font-weight: 600;
+  }
+  .brief-refining {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.75rem; margin-top: 0.75rem;
+    background: var(--bg-elev); border: 1px solid var(--border-strong);
+    font-size: 0.8rem; color: var(--text-dim);
+  }
+  .brief-refining-dot {
+    width: 8px; height: 8px; background: var(--text);
+    animation: pulse 1.2s infinite;
+  }
+
+  /* Skill suggestion card */
+  .skill-suggestion {
+    background: var(--bg-elev); border: 1px solid var(--border-strong);
+    padding: 1rem; margin-bottom: 1.5rem;
+  }
+  .skill-suggestion-head {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
+  }
+  .skill-suggestion-title {
+    font-size: 0.85rem; font-weight: 700; color: var(--text);
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .skill-suggestion-desc {
+    font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.75rem;
+    line-height: 1.4;
+  }
+  .skill-suggestion-actions {
+    display: flex; gap: 0.5rem; justify-content: flex-end;
+  }
+  .hook-suggestion-cmd {
+    font-size: 0.75rem; color: var(--text);
+    padding: 0.5rem 0.75rem; margin-bottom: 0.75rem;
+    background: var(--bg); border: 1px solid var(--border);
+    white-space: pre-wrap; word-break: break-all;
+  }
 
   /* Keyboard hint */
   kbd {
     background: var(--bg); border: 1px solid var(--border-strong);
-    border-radius: 3px; padding: 1px 5px; font-family: ui-monospace, monospace;
+    padding: 1px 5px; font-family: inherit;
     font-size: 0.7rem; color: var(--text-dim);
   }
 
   /* Utilities */
   .hidden { display: none !important; }
   [x-cloak] { display: none !important; }
+
+  /* Scrollbars — match the flat/minimal vibe */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 </style>
 </head><body>
 
@@ -261,9 +399,12 @@ export function dashboardHtml(): string {
 
   <header>
     <h1>Cacophony <span class="tracker-badge" x-text="trackerKind || 'loading'"></span></h1>
-    <div class="conn" :class="{live: connected, dead: !connected}">
-      <span class="conn-dot"></span>
-      <span x-text="connected ? 'live' : 'offline'"></span>
+    <div class="header-right">
+      <button class="theme-toggle" @click="toggleTheme()" x-text="theme === 'dark' ? 'light' : 'dark'" title="Toggle theme"></button>
+      <div class="conn" :class="{live: connected, dead: !connected}">
+        <span class="conn-dot"></span>
+        <span x-text="connected ? 'live' : 'offline'"></span>
+      </div>
     </div>
   </header>
 
@@ -271,39 +412,19 @@ export function dashboardHtml(): string {
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Running</div>
-      <div class="stat-value" style="color: var(--green)" x-text="running.length"></div>
+      <div class="stat-value running" x-text="running.length"></div>
     </div>
     <div class="stat">
       <div class="stat-label">Retrying</div>
-      <div class="stat-value" style="color: var(--yellow)" x-text="retrying.length"></div>
+      <div class="stat-value" x-text="retrying.length"></div>
     </div>
     <div class="stat">
       <div class="stat-label">Succeeded</div>
-      <div class="stat-value" style="color: var(--accent)" x-text="succeededCount"></div>
+      <div class="stat-value" x-text="succeededCount"></div>
     </div>
     <div class="stat">
       <div class="stat-label">Failed</div>
-      <div class="stat-value" style="color: var(--red)" x-text="failedCount"></div>
-    </div>
-  </div>
-
-  <!-- Running banner -->
-  <div class="running-banner" x-show="running.length">
-    <div>
-      <div class="running-banner-label">
-        <span class="dot" style="display:inline-block; vertical-align: middle; margin-right: 6px;"></span>
-        <span x-text="running.length + ' agent(s) running'"></span>
-      </div>
-      <div class="running-banner-items">
-        <template x-for="r in running" :key="r.issueId">
-          <div class="running-banner-item">
-            <span class="id" x-text="r.identifier"></span>
-            <span x-text="r.title || ''"></span>
-            <span style="color: var(--text-faint); font-variant-numeric: tabular-nums;" x-text="elapsed(r.startedAt)"></span>
-            <button class="icon-btn danger" @click="stopRun(r.identifier)" title="Stop">✕</button>
-          </div>
-        </template>
-      </div>
+      <div class="stat-value failed" x-text="failedCount"></div>
     </div>
   </div>
 
@@ -336,14 +457,47 @@ export function dashboardHtml(): string {
           <div class="modal-label">Your request</div>
           <div class="modal-desc" x-text="brief?.originalPrompt || ''"></div>
         </div>
-        <div class="modal-section">
+        <!-- Interactive question form (shown while not refining) -->
+        <div class="modal-section" x-show="!runBusy">
           <div class="modal-label">A few clarifying questions</div>
           <template x-for="(q, i) in (brief?.questions || [])" :key="i">
-            <div style="margin-bottom: 0.75rem;">
-              <div style="font-size: 0.9rem; margin-bottom: 0.25rem;" x-text="q"></div>
-              <textarea x-model="brief.answers[i]" rows="2" style="width:100%;" placeholder="Your answer..."></textarea>
+            <div class="brief-question">
+              <div class="brief-q-text" x-text="q.question"></div>
+              <template x-for="(opt, j) in q.options" :key="j">
+                <label class="brief-option">
+                  <input type="radio" :name="'brief-q-' + i" :value="opt" x-model="brief.answers[i].choice">
+                  <span x-text="opt"></span>
+                </label>
+              </template>
+              <label class="brief-option brief-option-other" x-show="q.options.length > 0">
+                <input type="radio" :name="'brief-q-' + i" value="__other__" x-model="brief.answers[i].choice">
+                <span>Other:</span>
+                <input type="text" x-model="brief.answers[i].other"
+                       :disabled="brief.answers[i].choice !== '__other__'"
+                       @focus="brief.answers[i].choice = '__other__'"
+                       placeholder="Type your answer…">
+              </label>
+              <input type="text" x-show="q.options.length === 0"
+                     class="brief-free-input"
+                     x-model="brief.answers[i].other"
+                     placeholder="Type your answer…">
             </div>
           </template>
+        </div>
+
+        <!-- Read-only summary of answers while the next round is in flight -->
+        <div class="modal-section" x-show="runBusy">
+          <div class="modal-label">Your answers</div>
+          <template x-for="(q, i) in (brief?.questions || [])" :key="i">
+            <div class="brief-summary-row">
+              <div class="brief-summary-q" x-text="q.question"></div>
+              <div class="brief-summary-a" x-text="_resolveBriefAnswer(i) || '—'"></div>
+            </div>
+          </template>
+          <div class="brief-refining">
+            <span class="brief-refining-dot"></span>
+            <span>Refining your task with the agent…</span>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
@@ -351,6 +505,33 @@ export function dashboardHtml(): string {
         <button class="btn" @click="skipBriefNow()">Skip, run as-is</button>
         <button class="btn primary" :disabled="runBusy" @click="continueBrief()" x-text="runBusy ? 'Refining…' : 'Continue'"></button>
       </div>
+    </div>
+  </div>
+
+  <!-- Hook suggestion (shown when brief suggests verification tools for the detected stack) -->
+  <div class="skill-suggestion" x-show="hookSuggestion">
+    <div class="skill-suggestion-head">
+      <span class="skill-suggestion-title">Verification hooks suggested</span>
+    </div>
+    <div class="skill-suggestion-desc">
+      Configure automatic build + test verification for this project?
+    </div>
+    <div class="hook-suggestion-cmd" x-text="hookSuggestion?.after_run || ''"></div>
+    <div class="skill-suggestion-actions">
+      <button class="btn" @click="skipHooksAndRun()">Skip</button>
+      <button class="btn primary" :disabled="runBusy" @click="applyHooksAndRun()" x-text="runBusy ? 'Applying…' : 'Apply & Run'"></button>
+    </div>
+  </div>
+
+  <!-- Skill suggestion (shown when brief detects a framework with a known skill pack) -->
+  <div class="skill-suggestion" x-show="skillSuggestion">
+    <div class="skill-suggestion-head">
+      <span class="skill-suggestion-title" x-text="(skillSuggestion?.name || '') + ' skills available'"></span>
+    </div>
+    <div class="skill-suggestion-desc" x-text="skillSuggestion?.description || ''"></div>
+    <div class="skill-suggestion-actions">
+      <button class="btn" @click="skipSkillsAndRun()">Skip</button>
+      <button class="btn primary" :disabled="runBusy" @click="installSkillsAndRun()" x-text="runBusy ? 'Installing…' : 'Install & Run'"></button>
     </div>
   </div>
 
@@ -380,25 +561,23 @@ export function dashboardHtml(): string {
           child: t._depth > 0
         }" :style="t._depth > 0 ? 'margin-left:' + (t._depth * 1.5) + 'rem' : ''" @click="openTask(t)">
         <div class="state-dot" :class="stateClass(t)"></div>
-        <div class="task-id" x-text="t.identifier"></div>
         <div class="task-title" x-text="t.title"></div>
 
-        <span class="blockers-icon" x-show="(t.blockedBy?.length || 0) > 0" :title="'Blocked by: ' + t.blockedBy.map(b => b.identifier).join(', ')">
-          ⛔
-        </span>
-
-        <div class="priority-badge" :class="'p' + t.priority" x-show="t.priority" x-text="'P' + t.priority"></div>
+        <span class="blocked-tag" x-show="(t.blockedBy?.length || 0) > 0" :title="'Blocked by: ' + t.blockedBy.map(b => b.identifier).join(', ')">blocked</span>
 
         <div class="task-meta" x-text="timeAgo(t.updatedAt || t.createdAt)"></div>
 
         <div class="task-actions" @click.stop>
-          <template x-if="t.state === 'todo'">
+          <template x-if="isRunning(t)">
+            <button class="icon-btn" @click="stopRun(t.identifier)" title="Stop">■</button>
+          </template>
+          <template x-if="!isRunning(t) && t.state === 'todo'">
             <button class="icon-btn" @click="setState(t, 'in-progress')" title="Start">▶</button>
           </template>
-          <template x-if="t.state === 'in-progress'">
+          <template x-if="!isRunning(t) && t.state === 'in-progress'">
             <button class="icon-btn" @click="setState(t, 'done')" title="Mark done">✓</button>
           </template>
-          <template x-if="!isDone(t)">
+          <template x-if="!isDone(t) && !isRunning(t)">
             <button class="icon-btn danger" @click="deleteTask(t)" title="Delete">✕</button>
           </template>
         </div>
@@ -447,22 +626,29 @@ export function dashboardHtml(): string {
                   <span class="run-meta" x-text="duration(r.durationMs) + ' · ' + timeAgo(r.startedAt)"></span>
                 </div>
                 <div class="run-error" x-show="r.error && r.status !== 'succeeded'" x-text="r.error"></div>
+                <details x-show="r.hookOutput" class="run-hook-output">
+                  <summary>Build output</summary>
+                  <pre x-text="r.hookOutput"></pre>
+                </details>
               </div>
             </template>
           </div>
         </div>
       </div>
       <div class="modal-foot" x-show="trackerKind === 'files' && selected">
-        <template x-if="selected && !selected?._historical && selected?.state === 'todo'">
+        <template x-if="selected && isRunning(selected)">
+          <button class="btn danger" @click="stopRun(selected.identifier); selected = null">Stop</button>
+        </template>
+        <template x-if="selected && !selected?._historical && !isRunning(selected) && selected?.state === 'todo'">
           <button class="btn primary" @click="setState(selected, 'in-progress'); selected = null">Start</button>
         </template>
-        <template x-if="selected && !selected?._historical && selected?.state === 'in-progress'">
+        <template x-if="selected && !selected?._historical && !isRunning(selected) && selected?.state === 'in-progress'">
           <button class="btn primary" @click="setState(selected, 'done'); selected = null">Mark done</button>
         </template>
-        <template x-if="selected && !selected?._historical && isDone(selected)">
+        <template x-if="selected && !selected?._historical && !isRunning(selected) && isDone(selected)">
           <button class="btn" @click="setState(selected, 'todo'); selected = null">Reopen</button>
         </template>
-        <button class="btn danger" @click="deleteTask(selected); selected = null">Delete</button>
+        <button class="btn danger" x-show="!isRunning(selected)" @click="deleteTask(selected); selected = null">Delete</button>
       </div>
     </div>
   </div>
@@ -483,15 +669,24 @@ function app() {
     briefEnabled: false,
     briefMaxRounds: 2,
     connected: false,
+    theme: 'dark',
     filter: 'active',
     search: '',
     selected: null,
-    newTask: { prompt: '', priority: '', skipBrief: false },
+    newTask: { prompt: '', skipBrief: false },
     brief: null,
+    briefGen: 0,
     runBusy: false,
+    skillSuggestion: null,  // { framework, name, description, prompt }
+    hookSuggestion: null,   // { after_run, prompt }
     _tick: 0,  // force re-render for elapsed time
 
     async init() {
+      // Restore saved theme before first paint; default to dark.
+      const saved = localStorage.getItem('caco.theme');
+      this.theme = saved === 'light' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = this.theme;
+
       await this.refresh();
       setInterval(() => this.refresh(), 3000);
       setInterval(() => this._tick++, 1000);
@@ -501,6 +696,12 @@ function app() {
           document.querySelector('.search')?.focus();
         }
       });
+    },
+
+    toggleTheme() {
+      this.theme = this.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = this.theme;
+      localStorage.setItem('caco.theme', this.theme);
     },
 
     async refresh() {
@@ -574,7 +775,9 @@ function app() {
           priority: null,
           labels: [],
           blockedBy: [],
-          parent: null,
+          // Recover parent from the run record (prefer the prompt run since
+          // both should have it, but fall back to the success run).
+          parent: promptRun?.parent || r.parent || null,
           url: null,
           startedAt: r.startedAt,
           updatedAt: r.finishedAt || r.startedAt,
@@ -702,15 +905,6 @@ function app() {
       if (s < 86400) return Math.floor(s/3600) + 'h ago';
       return Math.floor(s/86400) + 'd ago';
     },
-    elapsed(iso) {
-      this._tick; // reactivity
-      if (!iso) return '';
-      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-      const m = Math.floor(s / 60);
-      const sec = s % 60;
-      if (m > 0) return m + 'm ' + sec + 's';
-      return sec + 's';
-    },
     duration(ms) {
       if (ms == null) return '—';
       const s = Math.floor(ms / 1000);
@@ -727,21 +921,23 @@ function app() {
     async runTask() {
       const prompt = (this.newTask.prompt || '').trim();
       if (!prompt || this.runBusy) return;
-      const priority = this.newTask.priority ? Number(this.newTask.priority) : null;
 
       // Skip brief: either the user checked the box, or brief is disabled in config.
       if (!this.briefEnabled || this.newTask.skipBrief) {
-        await this.submitTask(prompt, priority);
+        await this.submitTask(prompt);
         return;
       }
 
-      // Kick off a brief round with just the user's prompt.
+      // Kick off a brief round with just the user's prompt. The gen counter
+      // lets us discard the result if the user cancels or skips mid-flight.
       this.runBusy = true;
+      const gen = ++this.briefGen;
       try {
         const result = await this.briefCall([{ role: 'user', content: prompt }]);
-        await this.handleBriefResult(result, prompt, priority, [{ role: 'user', content: prompt }]);
+        if (gen !== this.briefGen) return;
+        await this.handleBriefResult(result, prompt, [{ role: 'user', content: prompt }]);
       } finally {
-        this.runBusy = false;
+        if (gen === this.briefGen) this.runBusy = false;
       }
     },
 
@@ -760,29 +956,85 @@ function app() {
       }
     },
 
-    async handleBriefResult(result, originalPrompt, priority, transcript) {
+    // Known skill packs — mirrors the server-side SKILL_REGISTRY so the
+    // dashboard can show a suggestion without an extra API call.
+    _skillPacks: {
+      defold: { name: 'Defold Agent Config', description: '13 skills for Defold: proto editing, API docs, shaders, project build' },
+    },
+
+    async handleBriefResult(result, originalPrompt, transcript) {
       if (result.status === 'ready') {
         this.brief = null;
-        await this.submitTask(result.prompt || originalPrompt, priority);
+        // Check if the brief detected a framework that has a known skill pack
+        const frameworks = result.frameworks || [];
+        for (const fw of frameworks) {
+          const pack = this._skillPacks[fw];
+          if (pack) {
+            // Check if skills are already installed
+            try {
+              const check = await fetch('/api/v1/skills/status');
+              const status = await check.json();
+              if (!status.installed) {
+                // Show skill suggestion — pause before creating the task
+                this.skillSuggestion = {
+                  framework: fw,
+                  name: pack.name,
+                  description: pack.description,
+                  prompt: result.prompt || originalPrompt,
+                };
+                return;
+              }
+            } catch {
+              // skills status check failed — proceed without suggestion
+            }
+          }
+        }
+        // Check if the brief suggested verification hooks and we don't have any yet
+        if (result.suggestedHooks?.after_run && !this.hookSuggestion) {
+          // Show hook suggestion — pause before creating the task
+          this.hookSuggestion = {
+            after_run: result.suggestedHooks.after_run,
+            prompt: result.prompt || originalPrompt,
+          };
+          return;
+        }
+        await this.submitTask(result.prompt || originalPrompt);
         return;
       }
-      // clarify: open / update the brief modal
+      // clarify: open / update the brief modal. Each question gets an
+      // {choice, other} pair — choice is the selected option (or '__other__'
+      // if the user chose the free-text fallback); other is the typed text.
+      const questions = result.questions || [];
       this.brief = {
         originalPrompt,
-        priority,
         transcript,
-        questions: result.questions || [],
-        answers: new Array((result.questions || []).length).fill(''),
+        questions,
+        answers: questions.map((q) => ({
+          choice: q.options && q.options.length > 0 ? '' : '__other__',
+          other: '',
+        })),
         round: result.round || 1,
       };
+    },
+
+    // Resolve a question's answer to a single string. Preference order:
+    //   1. if the user picked a concrete option, use that option's text
+    //   2. otherwise if they typed into the "other" field, use that
+    //   3. otherwise, empty
+    _resolveBriefAnswer(i) {
+      const a = this.brief.answers[i];
+      if (!a) return '';
+      if (a.choice && a.choice !== '__other__') return a.choice;
+      return (a.other || '').trim();
     },
 
     async continueBrief() {
       if (!this.brief || this.runBusy) return;
       this.runBusy = true;
+      const gen = ++this.briefGen;
       try {
         const answersText = this.brief.questions
-          .map((q, i) => 'Q: ' + q + '\\nA: ' + (this.brief.answers[i] || '').trim())
+          .map((q, i) => 'Q: ' + q.question + '\\nA: ' + this._resolveBriefAnswer(i))
           .join('\\n\\n');
         const nextTranscript = [
           ...this.brief.transcript,
@@ -790,30 +1042,86 @@ function app() {
           { role: 'user', content: answersText },
         ];
         const result = await this.briefCall(nextTranscript);
-        await this.handleBriefResult(result, this.brief.originalPrompt, this.brief.priority, nextTranscript);
+        if (gen !== this.briefGen) return;
+        await this.handleBriefResult(result, this.brief.originalPrompt, nextTranscript);
       } finally {
-        this.runBusy = false;
+        if (gen === this.briefGen) this.runBusy = false;
       }
     },
 
     async skipBriefNow() {
       if (!this.brief) return;
-      const { originalPrompt, priority } = this.brief;
+      // Invalidate any in-flight brief call so its result can't fire handleBriefResult.
+      this.briefGen++;
+      this.runBusy = false;
+      const { originalPrompt } = this.brief;
       this.brief = null;
-      await this.submitTask(originalPrompt, priority);
+      await this.submitTask(originalPrompt);
+    },
+
+    async applyHooksAndRun() {
+      if (!this.hookSuggestion) return;
+      const { after_run, prompt } = this.hookSuggestion;
+      this.runBusy = true;
+      try {
+        await fetch('/api/v1/config/hooks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ after_run }),
+        });
+      } catch {
+        // Apply failed — proceed anyway
+      }
+      this.hookSuggestion = null;
+      this.runBusy = false;
+      await this.submitTask(prompt);
+    },
+
+    skipHooksAndRun() {
+      if (!this.hookSuggestion) return;
+      const { prompt } = this.hookSuggestion;
+      this.hookSuggestion = null;
+      this.submitTask(prompt);
+    },
+
+    async installSkillsAndRun() {
+      if (!this.skillSuggestion) return;
+      const { framework, prompt } = this.skillSuggestion;
+      this.runBusy = true;
+      try {
+        await fetch('/api/v1/skills/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ framework }),
+        });
+      } catch (e) {
+        // Install failed — proceed anyway, gate will catch issues
+      }
+      this.skillSuggestion = null;
+      this.runBusy = false;
+      await this.submitTask(prompt);
+    },
+
+    async skipSkillsAndRun() {
+      if (!this.skillSuggestion) return;
+      const { prompt } = this.skillSuggestion;
+      this.skillSuggestion = null;
+      await this.submitTask(prompt);
     },
 
     cancelBrief() {
+      // Invalidate any in-flight brief call.
+      this.briefGen++;
+      this.runBusy = false;
       this.brief = null;
     },
 
-    async submitTask(prompt, priority) {
-      const body = { prompt, priority };
+    async submitTask(prompt) {
       await this.fetch('/api/v1/tasks', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(body),
+        body: JSON.stringify({ prompt }),
       });
-      this.newTask = { prompt: '', priority: '', skipBrief: false };
+      this.newTask = { prompt: '', skipBrief: false };
       await this.refresh();
     },
 
