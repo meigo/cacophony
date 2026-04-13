@@ -509,6 +509,24 @@ export class WorkspaceManager {
   }
 
   /**
+   * Returns true if the worktree has no modified, added, or untracked files.
+   * Used for no-changes detection: if the agent exited 0 but didn't touch
+   * any files, it probably misunderstood the task.
+   */
+  isWorktreeClean(wsPath: string): boolean {
+    if (!fs.existsSync(wsPath)) return true;
+    try {
+      const status = execFileSync('git', ['status', '--porcelain'], {
+        cwd: wsPath,
+        encoding: 'utf-8',
+      });
+      return status.trim() === '';
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * Prune any stale worktree references (e.g., from a crash).
    */
   pruneStale(): void {

@@ -1,8 +1,12 @@
 # Cacophony
 
-**A local CI system for LLM coding agents.** You queue a task; cacophony runs a coding agent in an isolated git worktree, verifies the result against your project's build and tests, and auto-merges the work to your base branch. The agent is the build; cacophony is the pipeline.
+**Autonomous multi-agent coding on autopilot.**
 
-More precisely, cacophony is an **outer-loop harness for CLI coding agents** like Claude Code, Codex, Qwen Code, Aider, or Gemini CLI. The agents have their own inner loop (read files, run commands, iterate on a single task). Cacophony is what happens *between* agent invocations — queuing, isolation, retry, pre-task refinement, post-task verification, merge, cleanup. If you've used GitHub Actions or Jenkins, the shape will feel familiar; the difference is the work unit is a non-deterministic LLM session instead of a deterministic build.
+*Still hitting a few false notes. But the show goes on.* You describe a task; cacophony hands it to an AI coding agent, checks that the result actually builds and passes tests, and merges it into your project. If something breaks, it retries with the error context. You come back to landed commits.
+
+Under the hood, cacophony is an outer-loop harness for CLI coding agents like Claude Code, Codex, Qwen Code, Aider, or Gemini CLI. The agents have their own inner loop (read files, run commands, iterate on a single task). Cacophony is what happens *between* agent invocations — queuing, isolation, retry, pre-task refinement, post-task verification, merge, cleanup. If you've used GitHub Actions or Jenkins, the shape will feel familiar; the difference is the work unit is a non-deterministic LLM session instead of a deterministic build.
+
+The name is a nod to [Symphony](https://github.com/symphony-framework/symphony), an early multi-agent orchestration project that inspired the initial design. Where symphony aimed for coordinated harmony, cacophony leans into the reality — multiple agents running loose in your repo, occasionally producing noise, but getting work done.
 
 ## What it does
 
@@ -320,12 +324,102 @@ Every `polling.interval_ms`, cacophony:
 4. **Skips** tasks whose blockers aren't yet resolved
 5. **Dispatches** eligible tasks until concurrency limit is reached
 
-### Retry behavior
+### Dispatch → verify → land pipeline
 
-- **Agent succeeds (exit 0):** Cacophony auto-merges the `cacophony/<id>` branch into the base branch (when the project root is clean and on the base), marks the task as `done` via the tracker's `setIssueState` method, deletes the task file, and removes the worktree. Custom trackers should implement `setIssueState`; if they don't, cacophony falls back to a 1-second continuation retry as a degraded mode.
-- **Agent fails (non-zero exit):** Exponential backoff: 10s, 20s, 40s, 80s... up to `max_retry_backoff_ms`.
-- **Agent times out:** Kill and retry with backoff.
-- **All retries are persisted to SQLite.** If cacophony crashes and restarts, pending retries are restored with corrected delays.
+The full lifecycle of a single task dispatch:
+
+```mermaid
+flowchart TD
+    A[Task picked up] --> B[Create/reuse worktree]
+    B --> C[Run before_run hook]
+    C -->|fail| ERR[Abort — schedule retry]
+    C -->|pass| D[Render prompt template]
+    D --> E[Spawn agent in worktree]
+    E --> F{Agent exit}
+
+    F -->|timeout| T[Kill agent — retry with backoff]
+    F -->|exit ≠ 0| FAIL
+    F -->|exit 0| G{Decomposition?}
+
+    G -->|new task files appeared| PLAN[Planning run — skip verification]
+    PLAN --> SUCCESS
+
+    G -->|no new tasks| H[Run after_run hook]
+    H -->|fail| FAIL[Verification failed]
+    H -->|pass| I{Worktree clean?}
+
+    I -->|files changed| SUCCESS[Success path]
+    I -->|zero changes| NOOP{Attempt #?}
+
+    NOOP -->|first try| RETRY1[Retry once with pointed message]
+    NOOP -->|second try| WONTFIX[Give up — mark wontfix]
+
+    SUCCESS --> M[Auto-merge to base branch]
+    M --> DONE[Mark done → delete task → remove worktree → delete branch]
+
+    FAIL --> STUCK{Stuck-loop?}
+    STUCK -->|3 identical errors OR 5 total failures| WONTFIX
+    STUCK -->|under threshold| BACKOFF[Retry with exponential backoff]
+```
+
+### Retry and failure handling
+
+```mermaid
+flowchart LR
+    FAIL[Failed attempt] --> NORM[Normalize error string]
+    NORM --> CHECK{Check recent errors}
+
+    CHECK -->|last 3 identical| GIVE_UP[Mark wontfix]
+    CHECK -->|5+ total failures| GIVE_UP
+    CHECK -->|under thresholds| RETRY[Schedule retry]
+
+    RETRY --> BACKOFF[Exponential backoff: 10s, 20s, 40s... max 5min]
+    BACKOFF --> INJECT[Inject last_error + last_hook_output into prompt]
+    INJECT --> DISPATCH[Re-dispatch agent]
+```
+
+Error normalization strips timestamps (`HH:MM:SS`), dates (`YYYY-MM-DD`), worktree paths, and durations (`Nms`) before comparing — so the same build error at different times counts as identical.
+
+### Retry context injection
+
+On retries, the prompt template receives two extra variables:
+
+- **`last_error`** — the error message from the previous failed run (tail 500 chars)
+- **`last_hook_output`** — the full build/test/lint output from the previous run (up to 10KB)
+
+This gives the agent the exact failure context, which is the single biggest factor in retry success rates. Without it, the agent re-reads files and guesses what went wrong; with it, the agent can jump straight to the failing line.
+
+### Success path detail
+
+When an agent exits 0, the `after_run` hook passes, and the worktree has changes:
+
+1. **Auto-merge** the `cacophony/<id>` branch into the base branch (fast-forward or merge commit). If the project root is dirty or on a different branch, the merge is skipped and the branch preserved.
+2. **Mark done** via the tracker's `setIssueState`.
+3. **Delete the task file** — the merged commits and SQLite run history are the durable record.
+4. **Remove the worktree** and auto-commit any uncommitted changes first.
+5. **Delete the branch** (only after the worktree is gone, since git refuses to delete a checked-out branch).
+
+### No-changes detection
+
+If the agent exits 0 and all hooks pass but the worktree has zero file changes, the agent didn't actually do any work. Cacophony:
+
+- **First attempt**: retries once with a pointed error message telling the agent to re-read the requirements and make specific changes.
+- **Second attempt with no changes**: gives up and marks the task `wontfix`. The task likely needs a more specific prompt.
+
+### Decomposition detection
+
+Agents can self-decompose a large task into subtasks by writing new `.md` files into `.cacophony/tasks/`. Cacophony snapshots the task directory before each run and diffs afterward. If new files appeared, the run is treated as a planning run — the `after_run` verification hook is skipped (there's no code to build), and the parent task completes normally. The new subtask files are picked up on the next poll cycle.
+
+### Stuck-loop prevention
+
+Two triggers cause cacophony to give up on a task:
+
+| Trigger | Threshold | Rationale |
+|---|---|---|
+| Same error repeating | 3 identical failures | Agent can't self-correct this error |
+| Total failure cap | 5 cumulative failures | Agent is thrashing between different errors |
+
+When either fires, the task is marked `wontfix` (a terminal state, so the poll loop stops re-dispatching it). The user can change it back to `todo` from the dashboard to retry with a different approach.
 
 ### Worktree safety
 

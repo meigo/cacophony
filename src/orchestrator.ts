@@ -510,45 +510,80 @@ export class Orchestrator {
         log.warn('Agent timed out', { durationMs: result.durationMs });
         this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, 'timeout');
       } else if (result.exitCode === 0 && hookResult.ok) {
-        this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
-        log.info('Agent succeeded', { durationMs: result.durationMs });
-        if (this.tracker.setIssueState) {
-          // Try to land the work on the base branch first. If the merge is
-          // skipped or conflicts, the cacophony/<id> branch is preserved so
-          // the user can resolve manually.
-          const merge = this.workspace.tryMergeIntoBase(issue.identifier);
-          if (merge.result === 'merged') {
-            log.info('Auto-merged into base branch');
-          } else if (merge.result === 'conflict') {
-            log.warn('Auto-merge conflict — branch preserved for manual resolution', {
-              reason: merge.reason,
-            });
+        // No-changes detection: if the agent exited 0 and the hook passed
+        // but the worktree has zero file changes, the agent didn't actually
+        // do any work. Retry once with a pointed message; give up on the
+        // second no-op to avoid wasting tokens on a comprehension failure.
+        const worktreeClean = this.workspace.isWorktreeClean(ws.path);
+        if (worktreeClean && !decomposed) {
+          const noChangeMsg =
+            'Agent made zero file changes. The task is NOT already complete — ' +
+            're-read the requirements carefully and make the specific changes described. ' +
+            'If you believe the work is already done, explain why in a commit message.';
+          this.store.finishRun(runId, 'failed', 0, noChangeMsg, hookOutput);
+          log.warn('Agent exited 0 but made no file changes', {
+            durationMs: result.durationMs,
+          });
+          // Only retry once for no-changes — a second no-op means the agent
+          // can't understand the task, not that it needs more time.
+          if (attempt === 0) {
+            this.retryEngine.scheduleFailureRetry(
+              issue.id,
+              issue.identifier,
+              attempt + 1,
+              noChangeMsg,
+            );
           } else {
-            log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
-          }
-
-          // Mark done, then delete the task file (the autonomous flow doesn't
-          // need to keep finished prompts around — the merged commits and the
-          // run history in SQLite are the durable record).
-          await this.tracker.setIssueState(issue.id, 'done').catch((e) => {
-            log.warn('Failed to mark issue done', { error: String(e) });
-          });
-          if (this.tracker.deleteIssue) {
-            await this.tracker.deleteIssue(issue.id).catch((e) => {
-              log.warn('Failed to delete done task file', { error: String(e) });
-            });
-          }
-          await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
-            log.warn('Failed to remove worktree after success', { error: String(e) });
-          });
-          // Delete the merged branch only after the worktree is gone, since git
-          // refuses to delete a branch that's checked out anywhere.
-          if (merge.result === 'merged') {
-            this.workspace.deleteBranch(issue.identifier);
+            log.error(
+              `Giving up on ${issue.identifier} — agent made no changes on two attempts. ` +
+                `The task may need a more specific prompt.`,
+            );
+            if (this.tracker.setIssueState) {
+              await this.tracker.setIssueState(issue.id, 'wontfix').catch(() => {});
+            }
           }
         } else {
-          // No way to advance state — fall back to continuation pattern.
-          this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
+          // Agent made real changes — normal success path.
+          this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
+          log.info('Agent succeeded', { durationMs: result.durationMs });
+          if (this.tracker.setIssueState) {
+            // Try to land the work on the base branch first. If the merge is
+            // skipped or conflicts, the cacophony/<id> branch is preserved so
+            // the user can resolve manually.
+            const merge = this.workspace.tryMergeIntoBase(issue.identifier);
+            if (merge.result === 'merged') {
+              log.info('Auto-merged into base branch');
+            } else if (merge.result === 'conflict') {
+              log.warn('Auto-merge conflict — branch preserved for manual resolution', {
+                reason: merge.reason,
+              });
+            } else {
+              log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
+            }
+
+            // Mark done, then delete the task file (the autonomous flow doesn't
+            // need to keep finished prompts around — the merged commits and the
+            // run history in SQLite are the durable record).
+            await this.tracker.setIssueState(issue.id, 'done').catch((e) => {
+              log.warn('Failed to mark issue done', { error: String(e) });
+            });
+            if (this.tracker.deleteIssue) {
+              await this.tracker.deleteIssue(issue.id).catch((e) => {
+                log.warn('Failed to delete done task file', { error: String(e) });
+              });
+            }
+            await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
+              log.warn('Failed to remove worktree after success', { error: String(e) });
+            });
+            // Delete the merged branch only after the worktree is gone, since git
+            // refuses to delete a branch that's checked out anywhere.
+            if (merge.result === 'merged') {
+              this.workspace.deleteBranch(issue.identifier);
+            }
+          } else {
+            // No way to advance state — fall back to continuation pattern.
+            this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
+          }
         }
       } else {
         // Either the agent exited non-zero OR the after_run verification hook
