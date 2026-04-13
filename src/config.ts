@@ -259,3 +259,59 @@ export function updateConfigHooks(
   const newYaml = stringifyYaml(parsed, { lineWidth: 0 });
   fs.writeFileSync(filePath, `---\n${newYaml}---${body}`, 'utf-8');
 }
+
+/**
+ * Safely update specific fields in the config YAML front matter.
+ * Preserves all other fields and the prompt template body.
+ */
+export function updateConfigFields(
+  filePath: string,
+  updates: {
+    agent?: { command?: string; max_concurrent?: number };
+    hooks?: { after_run?: string; after_create?: string; before_run?: string; before_remove?: string };
+    brief?: { enabled?: boolean; max_rounds?: number };
+  },
+): void {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  if (!raw.startsWith('---')) {
+    throw new Error('config file has no YAML front matter');
+  }
+  const endIdx = raw.indexOf('---', 3);
+  if (endIdx === -1) {
+    throw new Error('config file: unclosed YAML front matter');
+  }
+  const yamlStr = raw.slice(3, endIdx);
+  const body = raw.slice(endIdx + 3);
+  const parsed = (parseYaml(yamlStr) ?? {}) as Record<string, unknown>;
+
+  // Merge agent fields
+  if (updates.agent) {
+    const agent = (parsed.agent ?? {}) as Record<string, unknown>;
+    if (updates.agent.command !== undefined) agent.command = updates.agent.command;
+    if (updates.agent.max_concurrent !== undefined) agent.max_concurrent = updates.agent.max_concurrent;
+    if ((updates.agent as Record<string, unknown>).prompt_delivery !== undefined) {
+      agent.prompt_delivery = (updates.agent as Record<string, unknown>).prompt_delivery;
+    }
+    parsed.agent = agent;
+  }
+
+  // Merge hooks
+  if (updates.hooks) {
+    const hooks = (parsed.hooks ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(updates.hooks)) {
+      if (v !== undefined) hooks[k] = v;
+    }
+    parsed.hooks = hooks;
+  }
+
+  // Merge brief
+  if (updates.brief) {
+    const brief = (parsed.brief ?? {}) as Record<string, unknown>;
+    if (updates.brief.enabled !== undefined) brief.enabled = updates.brief.enabled;
+    if (updates.brief.max_rounds !== undefined) brief.max_rounds = updates.brief.max_rounds;
+    parsed.brief = brief;
+  }
+
+  const newYaml = stringifyYaml(parsed, { lineWidth: 0 });
+  fs.writeFileSync(filePath, `---\n${newYaml}---${body}`, 'utf-8');
+}

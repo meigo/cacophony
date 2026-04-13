@@ -509,18 +509,40 @@ export class WorkspaceManager {
   }
 
   /**
-   * Returns true if the worktree has no modified, added, or untracked files.
-   * Used for no-changes detection: if the agent exited 0 but didn't touch
-   * any files, it probably misunderstood the task.
+   * Returns true if the worktree has no meaningful changes compared to the
+   * base branch: no uncommitted modifications AND no new commits on the
+   * worktree branch beyond what the base branch has.
+   *
+   * This catches the case where a previous attempt committed work but the
+   * current attempt made no further changes — the branch still has real
+   * work that should be merged.
    */
   isWorktreeClean(wsPath: string): boolean {
     if (!fs.existsSync(wsPath)) return true;
     try {
+      // Check 1: uncommitted changes
       const status = execFileSync('git', ['status', '--porcelain'], {
         cwd: wsPath,
         encoding: 'utf-8',
       });
-      return status.trim() === '';
+      if (status.trim() !== '') return false;
+
+      // Check 2: commits ahead of the base branch. If the worktree branch
+      // has commits that the base doesn't, there's real work even if the
+      // working tree is clean (e.g. a previous attempt committed files).
+      const baseRef = this.baseBranch ?? 'main';
+      try {
+        const ahead = execFileSync(
+          'git',
+          ['rev-list', '--count', `${baseRef}..HEAD`],
+          { cwd: wsPath, encoding: 'utf-8' },
+        );
+        if (parseInt(ahead.trim(), 10) > 0) return false;
+      } catch {
+        // Base ref might not exist (new repo) — fall through to clean
+      }
+
+      return true;
     } catch {
       return true;
     }

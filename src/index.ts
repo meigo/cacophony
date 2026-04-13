@@ -3,9 +3,8 @@
 import path from 'node:path';
 import http from 'node:http';
 import fs from 'node:fs';
-import readline from 'node:readline';
 import chalk from 'chalk';
-import { ConfigManager, updateConfigHooks } from './config.js';
+import { ConfigManager, updateConfigHooks, updateConfigFields } from './config.js';
 import { StateStore } from './state.js';
 import { Orchestrator } from './orchestrator.js';
 import { Logger } from './logger.js';
@@ -15,17 +14,15 @@ import { runBrief } from './brief.js';
 import { lookupSkillPack, installSkillPack, isSkillInstalled } from './skills.js';
 
 const USAGE = `
-${chalk.bold('cacophony')} — Provider-agnostic agent orchestrator
+${chalk.bold('cacophony')} — Autonomous multi-agent coding on autopilot
 
 ${chalk.bold('Usage:')}
-  cacophony init                                       Generate .cacophony/config.md interactively
-  cacophony start [workflow.md] [--port N|--no-server] Start the daemon (dashboard on :8080 by default)
-  cacophony status [workflow.md]                       Show current state
-  cacophony stop <identifier> [workflow.md]            Cancel a running issue
-  cacophony help                                       Show this help
+  cacophony start [--port N|--no-server]   Start the daemon (dashboard on :8080 by default)
+  cacophony status                         Show current state
+  cacophony stop <identifier>              Cancel a running issue
+  cacophony help                           Show this help
 
 ${chalk.bold('Examples:')}
-  cacophony init
   cacophony start
   cacophony start --port 9000
   cacophony start --no-server
@@ -37,9 +34,6 @@ async function main(): Promise<void> {
   const command = args[0];
 
   switch (command) {
-    case 'init':
-      await cmdInit();
-      break;
     case 'start':
       await cmdStart(args.slice(1));
       break;
@@ -100,36 +94,6 @@ function resolveDbPath(projectRoot: string): string {
   return path.join(cacoDir, 'cacophony.db');
 }
 
-// --- Init ---
-
-function ask(rl: readline.Interface, question: string, fallback?: string): Promise<string> {
-  const suffix = fallback ? chalk.dim(` (${fallback})`) : '';
-  return new Promise((resolve) => {
-    rl.question(`  ${question}${suffix}: `, (answer) => {
-      resolve(answer.trim() || fallback || '');
-    });
-  });
-}
-
-function choose(
-  rl: readline.Interface,
-  question: string,
-  options: string[],
-  defaultIdx = 0,
-): Promise<string> {
-  return new Promise((resolve) => {
-    console.log(`\n  ${chalk.bold(question)}`);
-    for (let i = 0; i < options.length; i++) {
-      const marker = i === defaultIdx ? chalk.green('> ') : '  ';
-      console.log(`  ${marker}${i + 1}. ${options[i]}`);
-    }
-    rl.question(`  Choice ${chalk.dim(`(${defaultIdx + 1})`)}: `, (answer) => {
-      const idx = answer.trim() ? parseInt(answer.trim(), 10) - 1 : defaultIdx;
-      resolve(options[Math.max(0, Math.min(idx, options.length - 1))]);
-    });
-  });
-}
-
 interface AgentPreset {
   command: (model?: string) => string;
   delivery: string;
@@ -168,69 +132,27 @@ const AGENT_PRESETS: Record<string, AgentPreset> = {
   },
 };
 
-const CUSTOM_MODEL_LABEL = 'Custom…';
-
-async function cmdInit(): Promise<void> {
-  const outPath = path.resolve(DEFAULT_CONFIG_PATH);
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-
-  if (fs.existsSync(outPath)) {
-    console.log(chalk.yellow(`\n  ${DEFAULT_CONFIG_PATH} already exists at ${outPath}`));
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const overwrite = await ask(rl, 'Overwrite?', 'n');
-    if (overwrite.toLowerCase() !== 'y' && overwrite.toLowerCase() !== 'yes') {
-      console.log(chalk.dim('  Aborted.\n'));
-      rl.close();
-      return;
+/**
+ * Try to reverse-match a command string to a known preset + model.
+ * Returns { name: 'Custom', model: '' } if no preset matches.
+ */
+function detectPreset(command: string): { name: string; model: string } {
+  for (const [name, preset] of Object.entries(AGENT_PRESETS)) {
+    if (name === 'Custom') continue;
+    // Try each model (including no model)
+    const candidates = [...(preset.models ?? []), ''];
+    for (const model of candidates) {
+      if (preset.command(model || undefined) === command) {
+        return { name, model };
+      }
     }
-    rl.close();
   }
+  return { name: 'Custom', model: '' };
+}
 
-  console.log(chalk.bold('\n  Cacophony Init\n'));
-  console.log(chalk.dim(`  Generate ${DEFAULT_CONFIG_PATH} for your project.\n`));
+// --- Default prompt template (used when generating config from dashboard setup) ---
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  // --- Agent ---
-  const agentNames = Object.keys(AGENT_PRESETS);
-  const agentChoice = await choose(rl, 'Coding agent:', agentNames, 0);
-  const preset = AGENT_PRESETS[agentChoice];
-
-  let agentCommand = preset.command();
-  let agentDelivery = preset.delivery;
-
-  if (agentChoice === 'Custom') {
-    agentCommand = await ask(
-      rl,
-      'Agent command (use {{prompt_file}}, {{workspace}}, {{identifier}})',
-    );
-    const deliveryChoice = await choose(rl, 'How to pass the prompt:', ['file', 'stdin', 'arg'], 0);
-    agentDelivery = deliveryChoice;
-  } else if (preset.models?.length) {
-    const options = [...preset.models, CUSTOM_MODEL_LABEL];
-    const picked = await choose(rl, 'Model:', options, 0);
-    const model = picked === CUSTOM_MODEL_LABEL ? await ask(rl, 'Model name') : picked;
-    agentCommand = preset.command(model);
-  }
-
-  const maxConcurrent = await ask(rl, 'Max concurrent agents', '3');
-
-  rl.close();
-
-  // --- Generate ---
-  const workflow = `---
-agent:
-  command: "${agentCommand}"
-  prompt_delivery: ${agentDelivery}
-  timeout_ms: 3600000
-  max_concurrent: ${maxConcurrent}
-  max_turns: 50
-
-polling:
-  interval_ms: 30000
----
-
-You are an autonomous coding agent working on task **{{issue.identifier}}**.
+const DEFAULT_PROMPT_TEMPLATE = `You are an autonomous coding agent working on task **{{issue.identifier}}**.
 
 You are running inside a git worktree at the project root. A new branch has already been created for you.
 
@@ -262,13 +184,13 @@ After writing the files, exit cleanly. Cacophony will pick up the subtasks on th
 ## Instructions (only if you decided to do the task yourself)
 
 1. **Implement** the required changes in this worktree.
-2. **Build / type-check** the project (e.g. \`npm run build\`, \`cargo build\`, \`go build ./...\`). Runtime-only errors like missing imports, post-install hooks, and wiring mistakes only show up here — don't stop at \`tsc --noEmit\`. If there's no build step, briefly start the app or run a smoke script to catch init-time errors.
-3. **Write tests for any new behavior you introduced.** Not just "make existing tests still pass" — add new tests that exercise the lines you just wrote, including at least one realistic edge case (empty input, missing field, boundary value, or an unexpected state). If the project already has a test framework (vitest, jest, pytest, go test, cargo test, etc.), use it. If there are no tests yet and the feature is non-trivial, introduce a minimal test file for the module you touched rather than leaving it uncovered. A test that only asserts \`return 42\` because you wrote \`return 42\` is worth nothing — write tests that would fail if the implementation were wrong, not ones that just echo it back.
+2. **Build / type-check** the project (e.g. \\\`npm run build\\\`, \\\`cargo build\\\`, \\\`go build ./...\\\`). Runtime-only errors like missing imports, post-install hooks, and wiring mistakes only show up here — don't stop at \\\`tsc --noEmit\\\`. If there's no build step, briefly start the app or run a smoke script to catch init-time errors.
+3. **Write tests for any new behavior you introduced.** Not just "make existing tests still pass" — add new tests that exercise the lines you just wrote, including at least one realistic edge case (empty input, missing field, boundary value, or an unexpected state). If the project already has a test framework (vitest, jest, pytest, go test, cargo test, etc.), use it. If there are no tests yet and the feature is non-trivial, introduce a minimal test file for the module you touched rather than leaving it uncovered. A test that only asserts \\\`return 42\\\` because you wrote \\\`return 42\\\` is worth nothing — write tests that would fail if the implementation were wrong, not ones that just echo it back.
 4. **Run the full test suite** and make sure it passes. Fix any failures, whether in your new tests or pre-existing ones you may have regressed. Do not move on until everything passes.
 5. **Commit** your work on this branch. Cacophony will auto-commit anything you forget, but explicit commits give cleaner history.
 6. **Exit cleanly** when done. Cacophony will mark the task complete, run its verification hook, and clean up the worktree.
 
-**Defensive coding:** never assume external data (APIs, user input, database results, file contents) has all fields present and non-null. Use nullish coalescing (\`??\`), optional chaining (\`?.\`), or explicit guards before accessing properties. If a type says \`number\` but the data comes from a JSON API, treat it as \`number | null\` in practice. One missing null check is worse than ten redundant ones.
+**Defensive coding:** never assume external data (APIs, user input, database results, file contents) has all fields present and non-null. Use nullish coalescing (\\\`??\\\`), optional chaining (\\\`?.\\\`), or explicit guards before accessing properties. If a type says \\\`number\\\` but the data comes from a JSON API, treat it as \\\`number | null\\\` in practice. One missing null check is worse than ten redundant ones.
 
 A task is not done when the code compiles. A task is done when the code compiles, runs with real data without crashing, is covered by tests that actually exercise it, and the full suite is green.
 
@@ -291,54 +213,57 @@ Do NOT rewrite files that are already correct. Focus only on the files and lines
 {% endif %}
 `;
 
-  fs.writeFileSync(outPath, workflow, 'utf-8');
+function generateConfigFile(agentCommand: string, delivery: string, maxConcurrent: number): string {
+  return `---
+agent:
+  command: "${agentCommand}"
+  prompt_delivery: ${delivery}
+  timeout_ms: 3600000
+  max_concurrent: ${maxConcurrent}
+  max_turns: 50
 
-  console.log(chalk.green(`\n  Created ${outPath}\n`));
-  console.log(chalk.dim('  Review and customize the file, then run:\n'));
-  console.log(`    ${chalk.bold('cacophony start')}\n`);
+polling:
+  interval_ms: 30000
+---
+
+${DEFAULT_PROMPT_TEMPLATE}`;
 }
 
 // --- Start ---
 
-async function cmdStart(args: string[]): Promise<void> {
-  const workflowPath = resolveWorkflowPath(args);
-  const portStr = getFlag(args, '--port');
+/**
+ * Mutable server state. The HTTP server starts immediately; if no config
+ * exists yet the orchestrator/configManager are null and the dashboard
+ * shows the setup screen. After the user completes setup via the dashboard,
+ * `bootOrchestrator` fills these in and starts the poll loop.
+ */
+interface ServerState {
+  orchestrator: Orchestrator | null;
+  configManager: ConfigManager | null;
+  logger: Logger;
+  configPath: string;
+}
 
-  const logger = new Logger();
+async function bootOrchestrator(state: ServerState): Promise<void> {
+  const { configPath, logger } = state;
+  logger.info(`Loading workflow from ${configPath}`);
 
-  logger.info(`Loading workflow from ${workflowPath}`);
-
-  const configManager = new ConfigManager(workflowPath, logger);
+  const configManager = new ConfigManager(configPath, logger);
   const wf = configManager.load();
   const config = wf.config;
 
   const dbPath = resolveDbPath(config.workspace.projectRoot);
   const store = new StateStore(dbPath);
-
   logger.info(`Database at ${dbPath}`);
 
   const orchestrator = new Orchestrator(configManager, store, logger);
-
-  // Graceful shutdown
-  const shutdown = async () => {
-    await orchestrator.stop();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-
-  // HTTP dashboard — defaults to 8080 unless --no-server is passed
-  if (!args.includes('--no-server')) {
-    const port = portStr ? parseInt(portStr, 10) : (config.server?.port ?? 8080);
-    startHttpServer(orchestrator, configManager, port, logger);
-  }
+  state.orchestrator = orchestrator;
+  state.configManager = configManager;
 
   await orchestrator.start();
 
-  // Keep process alive
+  // Sentinel file watcher for CLI-based stop
   setInterval(() => {
-    // Check for stop sentinel files
     const sentinelDir = path.join(path.resolve(config.workspace.projectRoot), '.cacophony');
     try {
       const files = fs.readdirSync(sentinelDir);
@@ -355,6 +280,42 @@ async function cmdStart(args: string[]): Promise<void> {
       // ignore
     }
   }, 5_000);
+}
+
+async function cmdStart(args: string[]): Promise<void> {
+  const configPath = resolveWorkflowPath(args);
+  const portStr = getFlag(args, '--port');
+  const logger = new Logger();
+
+  const state: ServerState = {
+    orchestrator: null,
+    configManager: null,
+    logger,
+    configPath,
+  };
+
+  // If config already exists, boot the orchestrator immediately.
+  if (fs.existsSync(configPath)) {
+    await bootOrchestrator(state);
+  } else {
+    logger.info('No config found — starting in setup mode. Open the dashboard to configure.');
+  }
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    if (state.orchestrator) await state.orchestrator.stop();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  // HTTP dashboard — defaults to 8080 unless --no-server is passed
+  if (!args.includes('--no-server')) {
+    const port = portStr
+      ? parseInt(portStr, 10)
+      : (state.configManager?.getCurrent().config.server?.port ?? 8080);
+    startHttpServer(state, port);
+  }
 }
 
 async function cmdStatus(args: string[]): Promise<void> {
@@ -464,12 +425,8 @@ function getFilesTracker(orchestrator: Orchestrator): FilesTracker | null {
   return null;
 }
 
-function startHttpServer(
-  orchestrator: Orchestrator,
-  configManager: ConfigManager,
-  port: number,
-  logger: Logger,
-): void {
+function startHttpServer(state: ServerState, port: number): void {
+  const { logger } = state;
   // Lazy import dashboard
   let dashboardHtmlFn: (() => string) | null = null;
 
@@ -495,11 +452,98 @@ function startHttpServer(
         return;
       }
 
-      // --- Status API ---
-      if (req.method === 'GET' && url.pathname === '/api/v1/status') {
-        json(200, orchestrator.getStatus());
+      // --- Setup API (available before config exists) ---
+      if (req.method === 'GET' && url.pathname === '/api/v1/setup/presets') {
+        const presets = Object.entries(AGENT_PRESETS)
+          .filter(([name]) => name !== 'Custom')
+          .map(([name, p]) => ({
+            name,
+            models: p.models ?? [],
+            delivery: p.delivery,
+          }));
+        json(200, { presets, needsSetup: !state.orchestrator });
         return;
       }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/setup') {
+        if (state.orchestrator) {
+          json(400, { error: 'Already configured' });
+          return;
+        }
+        const body = JSON.parse(await readBody(req));
+        const agentName = typeof body.agent === 'string' ? body.agent : '';
+        const model = typeof body.model === 'string' ? body.model : '';
+        const maxConcurrent = Math.max(1, Math.min(10, parseInt(body.maxConcurrent, 10) || 3));
+        const customCommand = typeof body.customCommand === 'string' ? body.customCommand : '';
+        const customDelivery = typeof body.customDelivery === 'string' ? body.customDelivery : 'file';
+
+        let agentCommand: string;
+        let delivery: string;
+
+        if (agentName === 'Custom') {
+          if (!customCommand.trim()) {
+            json(400, { error: 'Custom agent requires a command' });
+            return;
+          }
+          agentCommand = customCommand.trim();
+          delivery = customDelivery;
+        } else {
+          const preset = AGENT_PRESETS[agentName];
+          if (!preset) {
+            json(400, { error: `Unknown agent: ${agentName}` });
+            return;
+          }
+          agentCommand = preset.command(model || undefined);
+          delivery = preset.delivery;
+        }
+
+        // Write the config file
+        const outPath = path.resolve(state.configPath);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, generateConfigFile(agentCommand, delivery, maxConcurrent), 'utf-8');
+        logger.info(`Config created via dashboard setup: ${outPath}`);
+
+        // Boot the orchestrator now that we have a config
+        try {
+          await bootOrchestrator(state);
+          json(201, { created: true });
+        } catch (e) {
+          // Config was written but orchestrator failed to start — remove
+          // the broken config so the user can try again.
+          try { fs.unlinkSync(outPath); } catch { /* ignore */ }
+          json(500, { error: `Failed to start: ${e}` });
+        }
+        return;
+      }
+
+      // --- Status API ---
+      if (req.method === 'GET' && url.pathname === '/api/v1/status') {
+        if (!state.orchestrator) {
+          json(200, {
+            needsSetup: true,
+            running: [],
+            retrying: [],
+            claimed: [],
+            trackerKind: '',
+            activeStates: [],
+            terminalStates: [],
+            briefEnabled: false,
+            briefMaxRounds: 2,
+          });
+          return;
+        }
+        json(200, state.orchestrator.getStatus());
+        return;
+      }
+
+      // --- All remaining endpoints require an active orchestrator ---
+      if (!state.orchestrator || !state.configManager) {
+        json(503, { error: 'Not configured yet — complete setup first' });
+        return;
+      }
+
+      const orchestrator = state.orchestrator;
+      const configManager = state.configManager;
 
       // --- Runs API ---
       if (req.method === 'GET' && url.pathname === '/api/v1/runs') {
@@ -586,11 +630,77 @@ function startHttpServer(
           return;
         }
         try {
-          updateConfigHooks(configManager.getFilePath(), { after_run: afterRun });
+          const hooks: { after_run: string; after_create?: string } = { after_run: afterRun };
+          // Auto-set after_create to bootstrap node_modules if the after_run
+          // uses npm/npx tools and no after_create hook is configured yet.
+          const currentConfig = configManager.getCurrent().config;
+          if (!currentConfig.hooks.afterCreate && /\bnpx?\b/.test(afterRun)) {
+            hooks.after_create =
+              'if [ -d ../../../node_modules ]; then\n' +
+              '  cp -Rc ../../../node_modules . 2>/dev/null || cp -r ../../../node_modules .\n' +
+              'else\n' +
+              '  npm install --prefer-offline\n' +
+              'fi';
+          }
+          updateConfigHooks(configManager.getFilePath(), hooks);
           configManager.reload();
-          json(200, { updated: true, after_run: afterRun });
+          json(200, { updated: true, after_run: afterRun, after_create: hooks.after_create });
         } catch (e) {
           json(500, { error: `Failed to update hooks: ${e}` });
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/config') {
+        const config = configManager.getCurrent().config;
+        // Reverse-match the current command to a known preset + model.
+        const detected = detectPreset(config.agent.command);
+        json(200, {
+          agent: {
+            command: config.agent.command,
+            max_concurrent: config.agent.maxConcurrent,
+            // Detected preset info so the UI can pre-select the right card
+            preset: detected.name,
+            model: detected.model,
+          },
+          hooks: {
+            after_create: config.hooks.afterCreate ?? '',
+            before_run: config.hooks.beforeRun ?? '',
+            after_run: config.hooks.afterRun ?? '',
+            before_remove: config.hooks.beforeRemove ?? '',
+          },
+          brief: {
+            enabled: config.brief.enabled,
+            max_rounds: config.brief.maxRounds,
+          },
+        });
+        return;
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/api/v1/config') {
+        const body = JSON.parse(await readBody(req));
+        // If the client sent agent.preset + agent.model, resolve to command string.
+        if (body.agent?.preset) {
+          const presetName = body.agent.preset;
+          const model = body.agent.model || '';
+          if (presetName === 'Custom') {
+            body.agent.command = body.agent.command || '';
+          } else {
+            const preset = AGENT_PRESETS[presetName];
+            if (preset) {
+              body.agent.command = preset.command(model || undefined);
+              body.agent.prompt_delivery = preset.delivery;
+            }
+          }
+          delete body.agent.preset;
+          delete body.agent.model;
+        }
+        try {
+          updateConfigFields(configManager.getFilePath(), body);
+          configManager.reload();
+          json(200, { updated: true });
+        } catch (e) {
+          json(500, { error: `Failed to update config: ${e}` });
         }
         return;
       }

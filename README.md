@@ -39,9 +39,10 @@ Run from inside any git repository:
 
 ```bash
 cd my-project
-cacophony init            # generates .cacophony/config.md
 cacophony start           # dashboard on http://localhost:8080
 ```
+
+If no config exists yet, the dashboard opens to a setup screen where you pick your coding agent, model, and concurrency. One click and you're running.
 
 Pass `--port N` to use a different port, or `--no-server` to run headless.
 
@@ -111,7 +112,9 @@ Drop a file in `tasks/` and cacophony picks it up. Or manage everything from the
 
 ## Configuration reference
 
-The `.cacophony/config.md` file uses YAML front matter for config and a Liquid template body for the agent prompt. (Legacy `WORKFLOW.md` at the project root is still loaded as a fallback with a deprecation hint.)
+The `.cacophony/config.md` file uses YAML front matter for config and a Liquid template body for the agent prompt. You can edit it by hand or use the settings panel in the dashboard (gear icon in the header). If no config exists when you run `cacophony start`, the dashboard opens to a setup screen where you pick your agent and model — the config file is generated for you.
+
+Legacy `WORKFLOW.md` at the project root is still loaded as a fallback with a deprecation hint.
 
 ### `tracker` (optional)
 
@@ -172,6 +175,8 @@ hooks:
 ```
 
 The `after_run` hook is the single most important thing to configure if you want cacophony to genuinely verify agent work. Without it, cacophony trusts the agent's exit code; with it, every successful run has passed your quality gate.
+
+When the brief detects a JS/TS project, it suggests an appropriate `after_run` hook (e.g. `npx svelte-check && npx vitest run && npx biome check --write .`). If you accept the suggestion and no `after_create` hook is configured yet, cacophony auto-sets the `node_modules` bootstrap hook above — so dependencies are available when the verification runs.
 
 ### `polling`
 
@@ -401,10 +406,12 @@ When an agent exits 0, the `after_run` hook passes, and the worktree has changes
 
 ### No-changes detection
 
-If the agent exits 0 and all hooks pass but the worktree has zero file changes, the agent didn't actually do any work. Cacophony:
+If the agent exits 0 and all hooks pass but the worktree has no meaningful changes — no uncommitted modifications and no new commits beyond the base branch — the agent didn't actually do any work. Cacophony:
 
 - **First attempt**: retries once with a pointed error message telling the agent to re-read the requirements and make specific changes.
 - **Second attempt with no changes**: gives up and marks the task `wontfix`. The task likely needs a more specific prompt.
+
+The check accounts for work committed on previous attempts: if a prior run committed files but the current retry made no further changes, the branch still has real work and goes through the normal success path.
 
 ### Decomposition detection
 
@@ -463,23 +470,28 @@ For local development on your own machine with your own prompts, the practical r
 
 The dashboard is a single-file Alpine.js app served from the daemon. Monospaced JetBrains Mono typography, flat grayscale palette, red/green accents reserved for status indicators. Features:
 
+- **Setup screen** — shown on first run when no config exists. Pick your coding agent, model, and concurrency — config is generated and the orchestrator boots immediately.
+- **Settings panel** — gear icon in the header. Change agent/model, hooks, brief settings, and concurrency without editing YAML. Changes are hot-reloaded.
 - **Running agents** — live view with elapsed time and one-click stop
-- **Stats** — running / retrying / succeeded / failed counters
-- **Task list** — filterable (active / done / all) with search, parent/child hierarchy indentation
-- **Brief modal** — clarification questions when the brief agent doesn't have enough context to commit to a refined prompt
+- **Stats** — active / done / failed counters, clickable to filter
+- **Task list** — filterable (active / failed / done / all) with search, parent/child hierarchy indentation
+- **Task status tags** — running (green dot), failed (red), pending (gray, reopened from failure), blocked
+- **Brief modal** — clarification questions with radio-button options when the brief agent needs more context
 - **Task detail modal** — description, blockers, run history, error output, collapsible per-run build log
-- **Dark / light theme toggle** — click the button in the header; persisted to `localStorage` under `caco.theme`
+- **Dark / light theme toggle** — sun/moon icon in the header; persisted to `localStorage`
 - **Keyboard shortcuts** — `/` to focus search, `Esc` to close modals
-- **Task creation** — single prompt textarea (priority hidden by default; set via task file front matter if needed)
+- **Task creation** — single prompt textarea with optional "skip brief" checkbox
 - **Bulk clear** — wipe all tasks matching the current filter + search
-- **Blocker indicator** — shows which tasks are waiting on dependencies
+- **Skill and hook suggestions** — after brief, suggests community skill packs and verification hooks for the detected framework
 
 **API endpoints:**
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Dashboard HTML |
-| `GET` | `/api/v1/status` | Orchestrator state (running, retrying, claimed, trackerKind, activeStates, terminalStates, briefEnabled, briefMaxRounds) |
+| `GET` | `/api/v1/status` | Orchestrator state (running, retrying, claimed, trackerKind, activeStates, terminalStates, briefEnabled, briefMaxRounds). Returns `{ needsSetup: true }` when no config exists. |
+| `GET` | `/api/v1/setup/presets` | Available agent presets (name, models, delivery) for the setup screen |
+| `POST` | `/api/v1/setup` | Create config and boot orchestrator `{ agent, model?, maxConcurrent?, customCommand?, customDelivery? }` |
 | `GET` | `/api/v1/runs?limit=N` | Recent run history (includes `prompt`, `hookOutput`, and `error` fields) |
 | `GET` | `/api/v1/tasks` | All tasks (files tracker only) |
 | `POST` | `/api/v1/tasks` | Create task `{ prompt, priority? }` (identifier is auto-generated from the prompt) |
@@ -489,6 +501,8 @@ The dashboard is a single-file Alpine.js app served from the daemon. Monospaced 
 | `POST` | `/api/v1/stop/:id` | Cancel running agent |
 | `POST` | `/api/v1/skills/install` | Install a community skill pack `{ framework }` (clones, renames, commits) |
 | `GET` | `/api/v1/skills/status` | Check if skills are installed `{ installed: boolean }` |
+| `GET` | `/api/v1/config` | Current config (agent, hooks, brief) |
+| `PUT` | `/api/v1/config` | Update config fields `{ agent?, hooks?, brief? }` (merges into YAML, triggers hot-reload) |
 | `POST` | `/api/v1/config/hooks` | Update verification hooks `{ after_run }` (merges into config YAML, triggers hot-reload) |
 
 ## Development

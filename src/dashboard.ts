@@ -69,22 +69,20 @@ export function dashboardHtml(): string {
 
   /* Header */
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
-  h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); letter-spacing: 0.02em; text-transform: uppercase; }
-  h1 .tracker-badge {
-    font-size: 0.65rem; font-weight: 500; color: var(--text-dim); text-transform: lowercase;
-    margin-left: 0.5rem; padding: 2px 8px; background: var(--bg-elev); border: 1px solid var(--border);
-    letter-spacing: 0.05em;
-  }
+  h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); letter-spacing: 0.02em; text-transform: uppercase; display: flex; align-items: center; gap: 0.5rem; }
+  h1 .logo-icon { width: 20px; height: 20px; color: var(--text); }
   .header-right { display: flex; align-items: center; gap: 0.5rem; }
   .theme-toggle {
-    padding: 4px 10px; font-size: 0.7rem; font-weight: 500; color: var(--text-dim);
-    background: var(--bg-elev); border: 1px solid var(--border); text-transform: lowercase;
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; color: var(--text-dim);
+    background: var(--bg-elev); border: 1px solid var(--border);
   }
   .theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+  .theme-toggle svg { width: 16px; height: 16px; }
   .conn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px; font-size: 0.7rem; font-weight: 600;
-    background: var(--bg-elev); border: 1px solid var(--border); text-transform: lowercase;
+    display: inline-flex; align-items: center;
+    width: 32px; height: 32px; justify-content: center;
+    background: var(--bg-elev); border: 1px solid var(--border);
   }
   .conn-dot { width: 6px; height: 6px; background: var(--text-faint); }
   .conn.live .conn-dot { background: var(--green); }
@@ -194,6 +192,7 @@ export function dashboardHtml(): string {
   }
   .blocked-tag { color: var(--text-dim); }
   .failed-tag { color: var(--red); border-color: var(--red); }
+  .pending-tag { color: var(--text-dim); }
   .task-actions {
     display: flex; gap: 4px; opacity: 0.4;
     transition: opacity 0.15s;
@@ -398,6 +397,76 @@ export function dashboardHtml(): string {
   .hidden { display: none !important; }
   [x-cloak] { display: none !important; }
 
+  /* Settings modal */
+  .settings-field { margin-bottom: 1rem; }
+  .settings-field label {
+    display: block; font-size: 0.65rem; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem;
+  }
+  .settings-field input[type="text"],
+  .settings-field input[type="number"],
+  .settings-field textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    padding: 8px 12px; color: var(--text); font-family: inherit; font-size: 0.85rem;
+  }
+  .settings-field textarea { min-height: 50px; resize: vertical; }
+  .settings-field input:focus, .settings-field textarea:focus { outline: none; border-color: var(--text); }
+  .settings-field select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    padding: 8px 10px; color: var(--text); font-family: inherit; font-size: 0.85rem;
+  }
+  .settings-field select:focus { outline: none; border-color: var(--text); }
+  .settings-toggle {
+    display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
+    font-size: 0.85rem; color: var(--text);
+  }
+  .settings-toggle input { accent-color: var(--text); }
+  .settings-saved {
+    font-size: 0.75rem; color: var(--green); margin-left: 0.5rem;
+    transition: opacity 0.3s; opacity: 0;
+  }
+  .settings-saved.show { opacity: 1; }
+
+  /* Setup screen */
+  .setup {
+    max-width: 500px; margin: 0 auto; padding-top: 2rem;
+  }
+  .setup h2 {
+    font-size: 1.1rem; font-weight: 700; margin-bottom: 0.25rem;
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
+  .setup .setup-sub {
+    font-size: 0.8rem; color: var(--text-dim); margin-bottom: 1.5rem;
+  }
+  .setup-label {
+    font-size: 0.7rem; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;
+  }
+  .setup-section { margin-bottom: 1.25rem; }
+  .agent-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;
+  }
+  .agent-card {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 0.75rem; cursor: pointer; text-align: center;
+    transition: border-color 0.15s;
+  }
+  .agent-card:hover { border-color: var(--border-strong); }
+  .agent-card.selected { border-color: var(--text); }
+  .agent-card-name { font-size: 0.85rem; font-weight: 600; }
+  .setup select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    padding: 8px 10px; color: var(--text); font-family: inherit; font-size: 0.85rem;
+  }
+  .setup select:focus { outline: none; border-color: var(--text); }
+  .setup input[type="number"], .setup input[type="text"] {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    padding: 8px 12px; color: var(--text); font-family: inherit; font-size: 0.85rem;
+  }
+  .setup input:focus { outline: none; border-color: var(--text); }
+  .setup-actions { margin-top: 1.5rem; }
+  .setup .btn.primary { width: 100%; }
+
   /* Scrollbars — match the flat/minimal vibe */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -408,13 +477,73 @@ export function dashboardHtml(): string {
 
 <div x-data="app()" x-init="init()" x-cloak>
 
+  <!-- Setup screen (shown when no config exists) -->
+  <template x-if="needsSetup">
+    <div class="setup">
+      <h2>Cacophony</h2>
+      <div class="setup-sub">Pick your coding agent to get started.</div>
+
+      <div class="setup-section">
+        <div class="setup-label">Agent</div>
+        <div class="agent-grid">
+          <template x-for="p in setupPresets" :key="p.name">
+            <div class="agent-card" :class="{selected: setup.agent === p.name}" @click="setup.agent = p.name; setup.model = (p.models && p.models[0]) || ''">
+              <div class="agent-card-name" x-text="p.name"></div>
+            </div>
+          </template>
+          <div class="agent-card" :class="{selected: setup.agent === 'Custom'}" @click="setup.agent = 'Custom'; setup.model = ''">
+            <div class="agent-card-name">Custom</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-section" x-show="setupSelectedPreset?.models?.length > 0">
+        <div class="setup-label">Model</div>
+        <select x-model="setup.model">
+          <template x-for="m in (setupSelectedPreset?.models || [])" :key="m">
+            <option :value="m" x-text="m"></option>
+          </template>
+        </select>
+      </div>
+
+      <div class="setup-section" x-show="setup.agent === 'Custom'">
+        <div class="setup-label">Command</div>
+        <input type="text" x-model="setup.customCommand" placeholder="my-agent --prompt {{prompt_file}} --yes">
+        <div style="font-size:0.7rem;color:var(--text-faint);margin-top:0.25rem;">
+          Variables: {{prompt_file}}, {{workspace}}, {{identifier}}
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <div class="setup-label">Max concurrent agents</div>
+        <input type="number" x-model.number="setup.maxConcurrent" min="1" max="10">
+      </div>
+
+      <div class="setup-actions">
+        <button class="btn primary" @click="submitSetup()" :disabled="setupBusy || (!setupSelectedPreset && setup.agent !== 'Custom') || (setup.agent === 'Custom' && !setup.customCommand.trim())">
+          <span x-text="setupBusy ? 'Starting…' : 'Start'"></span>
+        </button>
+      </div>
+      <div x-show="setupError" style="color:var(--red);font-size:0.8rem;margin-top:0.75rem;" x-text="setupError"></div>
+    </div>
+  </template>
+
+  <!-- Main dashboard (hidden during setup) -->
+  <template x-if="!needsSetup">
+  <div>
+
   <header>
-    <h1>Cacophony <span class="tracker-badge" x-text="trackerKind || 'loading'"></span></h1>
+    <h1><svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></svg>Cacophony</h1>
     <div class="header-right">
-      <button class="theme-toggle" @click="toggleTheme()" x-text="theme === 'dark' ? 'light' : 'dark'" title="Toggle theme"></button>
-      <div class="conn" :class="{live: connected, dead: !connected}">
+      <button class="theme-toggle" @click="openSettings()" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+      <button class="theme-toggle" @click="toggleTheme()" :title="theme === 'dark' ? 'Switch to light' : 'Switch to dark'">
+        <template x-if="theme === 'dark'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></template>
+        <template x-if="theme === 'light'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg></template>
+      </button>
+      <div class="conn" :class="{live: connected, dead: !connected}" :title="connected ? 'Connected' : 'Offline'">
         <span class="conn-dot"></span>
-        <span x-text="connected ? 'live' : 'offline'"></span>
       </div>
     </div>
   </header>
@@ -577,6 +706,7 @@ export function dashboardHtml(): string {
 
         <span class="blocked-tag" x-show="(t.blockedBy?.length || 0) > 0" :title="'Blocked by: ' + t.blockedBy.map(b => b.identifier).join(', ')">blocked</span>
         <span class="failed-tag" x-show="hasFailed(t)">failed</span>
+        <span class="blocked-tag pending-tag" x-show="isPending(t)">pending</span>
 
         <div class="task-meta" x-text="timeAgo(t.updatedAt || t.createdAt)"></div>
 
@@ -669,6 +799,83 @@ export function dashboardHtml(): string {
     </div>
   </div>
 
+  <!-- Settings modal -->
+  <div class="modal-backdrop" x-show="settingsOpen" @click="settingsOpen = false" @keydown.escape.window="settingsOpen = false">
+    <div class="modal" @click.stop x-show="settingsOpen" x-transition style="max-width: 520px;">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title">Settings<span class="settings-saved" :class="{show: settingsSaved}">Saved</span></div>
+        </div>
+        <button class="icon-btn" @click="settingsOpen = false">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-section">
+          <div class="modal-label">Agent</div>
+          <div class="settings-field">
+            <div class="agent-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 0.75rem;">
+              <template x-for="p in setupPresets" :key="p.name">
+                <div class="agent-card" :class="{selected: settingsForm.agent.preset === p.name}" @click="settingsForm.agent.preset = p.name; settingsForm.agent.model = (p.models && p.models[0]) || ''">
+                  <div class="agent-card-name" x-text="p.name"></div>
+                </div>
+              </template>
+              <div class="agent-card" :class="{selected: settingsForm.agent.preset === 'Custom'}" @click="settingsForm.agent.preset = 'Custom'; settingsForm.agent.model = ''">
+                <div class="agent-card-name">Custom</div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-field" x-show="settingsSelectedPreset?.models?.length > 0">
+            <label>Model</label>
+            <select x-model="settingsForm.agent.model">
+              <template x-for="m in (settingsSelectedPreset?.models || [])" :key="m">
+                <option :value="m" x-text="m"></option>
+              </template>
+            </select>
+          </div>
+          <div class="settings-field" x-show="settingsForm.agent.preset === 'Custom'">
+            <label>Command</label>
+            <input type="text" x-model="settingsForm.agent.command" placeholder="my-agent --prompt {{prompt_file}} --yes">
+          </div>
+          <div class="settings-field">
+            <label>Max concurrent</label>
+            <input type="number" x-model.number="settingsForm.agent.max_concurrent" min="1" max="10">
+          </div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-label">Hooks</div>
+          <div class="settings-field">
+            <label>after_run <span style="font-weight:400;text-transform:none;letter-spacing:0">(verification gate)</span></label>
+            <textarea x-model="settingsForm.hooks.after_run" rows="2" placeholder="npm test && npm run lint"></textarea>
+          </div>
+          <div class="settings-field">
+            <label>after_create <span style="font-weight:400;text-transform:none;letter-spacing:0">(worktree bootstrap)</span></label>
+            <textarea x-model="settingsForm.hooks.after_create" rows="2" placeholder="npm install --prefer-offline"></textarea>
+          </div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-label">Brief</div>
+          <div class="settings-field">
+            <label class="settings-toggle">
+              <input type="checkbox" x-model="settingsForm.brief.enabled"> Enable pre-task brief
+            </label>
+          </div>
+          <div class="settings-field" x-show="settingsForm.brief.enabled">
+            <label>Max rounds</label>
+            <input type="number" x-model.number="settingsForm.brief.max_rounds" min="1" max="5">
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="settingsOpen = false">Cancel</button>
+        <button class="btn primary" @click="saveSettings()" :disabled="settingsBusy">
+          <span x-text="settingsBusy ? 'Saving...' : 'Save'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  </div>
+  </template>
+
 </div>
 
 <script>
@@ -697,13 +904,32 @@ function app() {
     hookSuggestion: null,   // { after_run, prompt }
     _tick: 0,  // force re-render for elapsed time
 
-    async init() {
-      // Restore saved theme before first paint; default to dark.
-      const saved = localStorage.getItem('caco.theme');
-      this.theme = saved === 'light' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = this.theme;
+    // Settings modal state
+    settingsOpen: false,
+    settingsForm: { agent: { preset: '', model: '', command: '', max_concurrent: 3 }, hooks: { after_run: '', after_create: '' }, brief: { enabled: true, max_rounds: 2 } },
+    settingsBusy: false,
+    settingsSaved: false,
 
-      await this.refresh();
+    get settingsSelectedPreset() {
+      return this.setupPresets.find(p => p.name === this.settingsForm.agent.preset) || null;
+    },
+
+    // Setup screen state
+    needsSetup: false,
+    setupPresets: [],
+    setup: { agent: 'Claude Code', model: '', maxConcurrent: 3, customCommand: '', customDelivery: 'file' },
+    setupBusy: false,
+    setupError: '',
+
+    get setupSelectedPreset() {
+      return this.setupPresets.find(p => p.name === this.setup.agent) || null;
+    },
+
+    _pollStarted: false,
+
+    startPolling() {
+      if (this._pollStarted) return;
+      this._pollStarted = true;
       setInterval(() => this.refresh(), 3000);
       setInterval(() => this._tick++, 1000);
       window.addEventListener('keydown', (e) => {
@@ -714,6 +940,30 @@ function app() {
       });
     },
 
+    async init() {
+      // Restore saved theme before first paint; default to dark.
+      const saved = localStorage.getItem('caco.theme');
+      this.theme = saved === 'light' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = this.theme;
+
+      await this.refresh();
+
+      // If setup mode, fetch available presets for the setup screen.
+      if (this.needsSetup) {
+        try {
+          const data = await this.fetch('/api/v1/setup/presets');
+          this.setupPresets = data.presets || [];
+          if (this.setupPresets.length > 0) {
+            this.setup.agent = this.setupPresets[0].name;
+            this.setup.model = this.setupPresets[0].models?.[0] || '';
+          }
+        } catch { /* presets will be empty, user can still pick Custom */ }
+        return;
+      }
+
+      this.startPolling();
+    },
+
     toggleTheme() {
       this.theme = this.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = this.theme;
@@ -722,8 +972,14 @@ function app() {
 
     async refresh() {
       try {
-        const [status, tasks, runs] = await Promise.all([
-          this.fetch('/api/v1/status'),
+        const status = await this.fetch('/api/v1/status');
+        if (status.needsSetup) {
+          this.needsSetup = true;
+          this.connected = true;
+          return;
+        }
+        this.needsSetup = false;
+        const [tasks, runs] = await Promise.all([
           this.fetch('/api/v1/tasks').catch(() => []),
           this.fetch('/api/v1/runs?limit=100').catch(() => []),
         ]);
@@ -802,13 +1058,21 @@ function app() {
         };
       });
     },
-    // Set of identifiers that have at least one unresolved failure (no subsequent success).
-    // Reused by the Failed tab filter and the failedCount getter.
+    // Set of identifiers that have at least one unresolved failure (no subsequent
+    // success) AND whose task is not currently in an active state (reopened tasks
+    // are pending, not failed). Reused by the Failed tab filter and failedCount.
     get _failedIdentifiers() {
       const succeeded = new Set(this.runs.filter(r => r.status === 'succeeded').map(r => r.issueIdentifier));
+      // Tasks that have been reopened (moved back to an active state like 'todo')
+      // are no longer failed — they're pending retry.
+      const reopened = new Set(
+        this.tasks.filter(t => t.state === 'todo').map(t => t.identifier)
+      );
       const failed = new Set();
       for (const r of this.runs) {
-        if ((r.status === 'failed' || r.status === 'timed_out') && !succeeded.has(r.issueIdentifier)) {
+        if ((r.status === 'failed' || r.status === 'timed_out')
+            && !succeeded.has(r.issueIdentifier)
+            && !reopened.has(r.issueIdentifier)) {
           failed.add(r.issueIdentifier);
         }
       }
@@ -926,6 +1190,15 @@ function app() {
     },
     hasFailed(t) {
       if (this.isDone(t) || this.isRunning(t)) return false;
+      // A task reopened to 'todo' is pending, not failed.
+      if (t.state === 'todo') return false;
+      const latest = this.runs.find(r => r.issueIdentifier === t.identifier);
+      return latest && (latest.status === 'failed' || latest.status === 'timed_out');
+    },
+    // A task that was reopened from a failed state — has prior failures but
+    // is now back in 'todo' waiting to be re-dispatched.
+    isPending(t) {
+      if (this.isDone(t) || this.isRunning(t) || t.state !== 'todo') return false;
       const latest = this.runs.find(r => r.issueIdentifier === t.identifier);
       return latest && (latest.status === 'failed' || latest.status === 'timed_out');
     },
@@ -1154,6 +1427,93 @@ function app() {
       this.brief = null;
       this.skillSuggestion = null;
       this.hookSuggestion = null;
+    },
+
+    async submitSetup() {
+      this.setupBusy = true;
+      this.setupError = '';
+      try {
+        const r = await fetch('/api/v1/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent: this.setup.agent,
+            model: this.setup.model,
+            maxConcurrent: this.setup.maxConcurrent,
+            customCommand: this.setup.customCommand,
+            customDelivery: this.setup.customDelivery,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          this.setupError = data.error || 'Setup failed';
+          return;
+        }
+        // Setup complete — transition to normal dashboard mode.
+        this.needsSetup = false;
+        await this.refresh();
+        this.startPolling();
+      } catch (e) {
+        this.setupError = 'Connection failed';
+      } finally {
+        this.setupBusy = false;
+      }
+    },
+
+    async openSettings() {
+      try {
+        // Load presets if not already loaded (they're fetched during setup but
+        // skipped if the app launched in normal mode with an existing config).
+        if (this.setupPresets.length === 0) {
+          try {
+            const data = await this.fetch('/api/v1/setup/presets');
+            this.setupPresets = data.presets || [];
+          } catch { /* presets will be empty */ }
+        }
+        const config = await this.fetch('/api/v1/config');
+        this.settingsForm = {
+          agent: {
+            preset: config.agent?.preset || 'Custom',
+            model: config.agent?.model || '',
+            command: config.agent?.command || '',
+            max_concurrent: config.agent?.max_concurrent || 3,
+          },
+          hooks: { after_run: config.hooks?.after_run || '', after_create: config.hooks?.after_create || '' },
+          brief: { enabled: config.brief?.enabled ?? true, max_rounds: config.brief?.max_rounds || 2 },
+        };
+        this.settingsOpen = true;
+        this.settingsSaved = false;
+      } catch {
+        // config endpoint not available
+      }
+    },
+
+    async saveSettings() {
+      this.settingsBusy = true;
+      try {
+        const payload = {
+          agent: {
+            preset: this.settingsForm.agent.preset,
+            model: this.settingsForm.agent.model,
+            command: this.settingsForm.agent.preset === 'Custom' ? this.settingsForm.agent.command : undefined,
+            max_concurrent: this.settingsForm.agent.max_concurrent,
+          },
+          hooks: this.settingsForm.hooks,
+          brief: this.settingsForm.brief,
+        };
+        await fetch('/api/v1/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.settingsSaved = true;
+        setTimeout(() => { this.settingsSaved = false; }, 2000);
+        await this.refresh();
+      } catch {
+        // save failed
+      } finally {
+        this.settingsBusy = false;
+      }
     },
 
     async submitTask(prompt) {
