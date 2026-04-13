@@ -14,6 +14,45 @@ function sanitizeIdentifier(identifier: string): string {
     .replace(/\.+$/, '_');
 }
 
+/**
+ * Patterns for files that commonly contain secrets. These are appended to
+ * the worktree's .gitignore (if not already present) so agents can't
+ * accidentally commit API keys, credentials, or private keys.
+ */
+const SECRET_PATTERNS = [
+  '.env',
+  '.env.*',
+  '*.pem',
+  '*.key',
+  '*.p12',
+  '*.pfx',
+  'credentials.json',
+  'service-account*.json',
+  'config.js',
+  'secrets.*',
+];
+
+function ensureSecretGitignore(wsPath: string): void {
+  const gitignorePath = path.join(wsPath, '.gitignore');
+  let existing = '';
+  try {
+    existing = fs.readFileSync(gitignorePath, 'utf-8');
+  } catch {
+    // No .gitignore yet
+  }
+
+  const lines = new Set(existing.split('\n').map((l) => l.trim()));
+  const missing = SECRET_PATTERNS.filter((p) => !lines.has(p));
+  if (missing.length === 0) return;
+
+  const block =
+    (existing.length > 0 && !existing.endsWith('\n') ? '\n' : '') +
+    '\n# cacophony: prevent committing secrets\n' +
+    missing.join('\n') +
+    '\n';
+  fs.appendFileSync(gitignorePath, block, 'utf-8');
+}
+
 function findGitRoot(startDir: string): string | null {
   try {
     const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
@@ -235,6 +274,10 @@ export class WorkspaceManager {
       branch: branchName,
       baseRef,
     });
+
+    // Ensure common secret patterns are gitignored so agents can't
+    // accidentally commit API keys, credentials, or private keys.
+    ensureSecretGitignore(wsPath);
 
     // Run after_create hook if configured
     if (this.hooks.afterCreate) {

@@ -257,6 +257,9 @@ describe('WorkspaceManager', () => {
     it('skips the auto-commit when the worktree is clean', async () => {
       const mgr = new WorkspaceManager(dir, defaultHooks, logger);
       const ws = await mgr.ensureWorkspace('task-clean');
+      // Commit the auto-generated .gitignore so the worktree is truly clean.
+      git(ws.path, ['add', '-A']);
+      git(ws.path, ['commit', '-m', 'baseline', '--allow-empty']);
       const beforeCommits = git(dir, ['rev-list', '--count', 'cacophony/task-clean']);
 
       await mgr.removeWorkspace('task-clean');

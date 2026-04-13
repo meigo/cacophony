@@ -355,36 +355,10 @@ export function dashboardHtml(): string {
     animation: pulse 1.2s infinite;
   }
 
-  /* Skill suggestion card */
-  .skill-suggestion {
-    background: var(--bg-elev); border: 1px solid var(--border-strong);
-    padding: 1rem; margin-bottom: 1.5rem;
-  }
-  .skill-suggestion-head {
-    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
-  }
-  .skill-suggestion-title {
-    font-size: 0.85rem; font-weight: 700; color: var(--text);
-    text-transform: uppercase; letter-spacing: 0.03em;
-  }
-  .skill-suggestion-desc {
-    font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.75rem;
-    line-height: 1.4;
-  }
-  .skill-suggestion-actions {
-    display: flex; gap: 0.5rem; justify-content: flex-end;
-  }
   .brief-hint {
     font-size: 0.7rem; color: var(--text-faint);
     width: 100%; margin-bottom: 0.5rem;
   }
-  .hook-suggestion-cmd {
-    display: block; width: 100%;
-    font-family: inherit; font-size: 0.75rem; color: var(--text);
-    padding: 0.5rem 0.75rem; margin-bottom: 0.75rem;
-    background: var(--bg); border: 1px solid var(--border);
-  }
-  .hook-suggestion-cmd:focus { outline: none; border-color: var(--text); }
 
   /* Keyboard hint */
   kbd {
@@ -396,6 +370,19 @@ export function dashboardHtml(): string {
   /* Utilities */
   .hidden { display: none !important; }
   [x-cloak] { display: none !important; }
+
+  /* Toast notifications */
+  .toasts {
+    position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000;
+    display: flex; flex-direction: column; gap: 0.5rem; max-width: 400px;
+  }
+  .toast {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 0.6rem 1rem; font-size: 0.8rem; color: var(--text-dim);
+    animation: toast-in 0.2s ease-out;
+  }
+  .toast-title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
   /* Settings modal */
   .settings-field { margin-bottom: 1rem; }
@@ -646,33 +633,6 @@ export function dashboardHtml(): string {
     </div>
   </div>
 
-  <!-- Hook suggestion (shown when brief suggests verification tools for the detected stack) -->
-  <div class="skill-suggestion" x-show="hookSuggestion">
-    <div class="skill-suggestion-head">
-      <span class="skill-suggestion-title">Verification hooks suggested</span>
-    </div>
-    <div class="skill-suggestion-desc">
-      Configure automatic build + test verification for this project?
-    </div>
-    <input type="text" class="hook-suggestion-cmd" x-model="hookSuggestion.after_run">
-    <div class="skill-suggestion-actions">
-      <button class="btn" @click="skipHooksAndRun()">Skip</button>
-      <button class="btn primary" :disabled="runBusy" @click="applyHooksAndRun()" x-text="runBusy ? 'Applying…' : 'Apply & Run'"></button>
-    </div>
-  </div>
-
-  <!-- Skill suggestion (shown when brief detects a framework with a known skill pack) -->
-  <div class="skill-suggestion" x-show="skillSuggestion">
-    <div class="skill-suggestion-head">
-      <span class="skill-suggestion-title" x-text="(skillSuggestion?.name || '') + ' skills available'"></span>
-    </div>
-    <div class="skill-suggestion-desc" x-text="skillSuggestion?.description || ''"></div>
-    <div class="skill-suggestion-actions">
-      <button class="btn" @click="skipSkillsAndRun()">Skip</button>
-      <button class="btn primary" :disabled="runBusy" @click="installSkillsAndRun()" x-text="runBusy ? 'Installing…' : 'Install & Run'"></button>
-    </div>
-  </div>
-
   <!-- Filter tabs -->
   <div class="filters">
     <button class="filter-btn" :class="{active: filter === 'active'}" @click="filter = 'active'">
@@ -799,6 +759,16 @@ export function dashboardHtml(): string {
     </div>
   </div>
 
+  <!-- Toast notifications -->
+  <div class="toasts">
+    <template x-for="(t, i) in toasts" :key="i">
+      <div class="toast">
+        <div class="toast-title" x-text="t.title"></div>
+        <div x-text="t.message"></div>
+      </div>
+    </template>
+  </div>
+
   <!-- Settings modal -->
   <div class="modal-backdrop" x-show="settingsOpen" @click="settingsOpen = false" @keydown.escape.window="settingsOpen = false">
     <div class="modal" @click.stop x-show="settingsOpen" x-transition style="max-width: 520px;">
@@ -900,8 +870,7 @@ function app() {
     brief: null,
     briefGen: 0,
     runBusy: false,
-    skillSuggestion: null,  // { framework, name, description, prompt }
-    hookSuggestion: null,   // { after_run, prompt }
+    toasts: [],
     _tick: 0,  // force re-render for elapsed time
 
     // Settings modal state
@@ -1273,43 +1242,48 @@ function app() {
       defold: { name: 'Defold Agent Config', description: '13 skills for Defold: proto editing, API docs, shaders, project build' },
     },
 
+    toast(title, message, durationMs = 4000) {
+      const t = { title, message };
+      this.toasts.push(t);
+      setTimeout(() => { this.toasts = this.toasts.filter(x => x !== t); }, durationMs);
+    },
+
     async handleBriefResult(result, originalPrompt, transcript) {
       if (result.status === 'ready') {
         this.brief = null;
-        // Check if the brief detected a framework that has a known skill pack
+        const prompt = result.prompt || originalPrompt;
+
+        // Auto-install skill packs in the background (non-blocking).
         const frameworks = result.frameworks || [];
         for (const fw of frameworks) {
           const pack = this._skillPacks[fw];
           if (pack) {
-            // Check if skills are already installed
             try {
               const check = await fetch('/api/v1/skills/status');
               const status = await check.json();
               if (!status.installed) {
-                // Show skill suggestion — pause before creating the task
-                this.skillSuggestion = {
-                  framework: fw,
-                  name: pack.name,
-                  description: pack.description,
-                  prompt: result.prompt || originalPrompt,
-                };
-                return;
+                this.toast('Installing ' + pack.name, pack.description);
+                fetch('/api/v1/skills/install', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ framework: fw }),
+                }).catch(() => {});
               }
-            } catch {
-              // skills status check failed — proceed without suggestion
-            }
+            } catch { /* skip */ }
           }
         }
-        // Check if the brief suggested verification hooks and we don't have any yet
-        if (result.suggestedHooks?.after_run && !this.hookSuggestion) {
-          // Show hook suggestion — pause before creating the task
-          this.hookSuggestion = {
-            after_run: result.suggestedHooks.after_run,
-            prompt: result.prompt || originalPrompt,
-          };
-          return;
+
+        // Auto-apply suggested hooks in the background (non-blocking).
+        if (result.suggestedHooks?.after_run) {
+          this.toast('Verification hook added', result.suggestedHooks.after_run);
+          fetch('/api/v1/config/hooks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ after_run: result.suggestedHooks.after_run }),
+          }).then(() => this.refresh()).catch(() => {});
         }
-        await this.submitTask(result.prompt || originalPrompt);
+
+        await this.submitTask(prompt);
         return;
       }
       // clarify: open / update the brief modal. Each question gets an
@@ -1370,63 +1344,10 @@ function app() {
       await this.submitTask(originalPrompt);
     },
 
-    async applyHooksAndRun() {
-      if (!this.hookSuggestion) return;
-      const { after_run, prompt } = this.hookSuggestion;
-      this.runBusy = true;
-      try {
-        await fetch('/api/v1/config/hooks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ after_run }),
-        });
-      } catch {
-        // Apply failed — proceed anyway
-      }
-      this.hookSuggestion = null;
-      this.runBusy = false;
-      await this.submitTask(prompt);
-    },
-
-    async skipHooksAndRun() {
-      if (!this.hookSuggestion) return;
-      const { prompt } = this.hookSuggestion;
-      this.hookSuggestion = null;
-      await this.submitTask(prompt);
-    },
-
-    async installSkillsAndRun() {
-      if (!this.skillSuggestion) return;
-      const { framework, prompt } = this.skillSuggestion;
-      this.runBusy = true;
-      try {
-        await fetch('/api/v1/skills/install', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ framework }),
-        });
-      } catch (e) {
-        // Install failed — proceed anyway, gate will catch issues
-      }
-      this.skillSuggestion = null;
-      this.runBusy = false;
-      await this.submitTask(prompt);
-    },
-
-    async skipSkillsAndRun() {
-      if (!this.skillSuggestion) return;
-      const { prompt } = this.skillSuggestion;
-      this.skillSuggestion = null;
-      await this.submitTask(prompt);
-    },
-
     cancelBrief() {
-      // Invalidate any in-flight brief call and clear any pending suggestions.
       this.briefGen++;
       this.runBusy = false;
       this.brief = null;
-      this.skillSuggestion = null;
-      this.hookSuggestion = null;
     },
 
     async submitSetup() {

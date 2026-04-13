@@ -435,6 +435,7 @@ When either fires, the task is marked `wontfix` (a terminal state, so the poll l
 - Stale worktrees are pruned on startup via `git worktree prune`
 - Failed worktree creation cleans up with `git worktree remove --force`
 - Each task works on its own branch `cacophony/<identifier>`
+- **Secret protection**: every new worktree gets common secret patterns (`.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `config.js`, etc.) auto-appended to its `.gitignore` — so agents can't accidentally commit API keys or credentials, even if the project's own `.gitignore` doesn't cover them
 
 ### Security: what the agent can and cannot access
 
@@ -482,7 +483,7 @@ The dashboard is a single-file Alpine.js app served from the daemon. Monospaced 
 - **Keyboard shortcuts** — `/` to focus search, `Esc` to close modals
 - **Task creation** — single prompt textarea with optional "skip brief" checkbox
 - **Bulk clear** — wipe all tasks matching the current filter + search
-- **Skill and hook suggestions** — after brief, suggests community skill packs and verification hooks for the detected framework
+- **Auto-apply hooks and skills** — when the brief detects a framework, verification hooks and community skill packs are installed automatically in the background with a toast notification (no blocking prompts)
 
 **API endpoints:**
 
