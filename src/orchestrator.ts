@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { Liquid } from 'liquidjs';
 import type {
   Issue,
@@ -363,9 +364,22 @@ export class Orchestrator {
         throw new Error(`before_run hook failed: ${beforeRun.output}`);
       }
 
-      // Render prompt
+      // Render prompt. On retries, inject the previous run's error and full
+      // build output so the agent starts with the exact failure context —
+      // the single biggest factor in retry success rates.
       const wf = this.configManager.getCurrent();
       const tasksDir = this.tracker.getTasksDir?.();
+
+      let lastError: string | null = null;
+      let lastHookOutput: string | null = null;
+      if (attempt > 0) {
+        const prev = this.store.getLatestRun(issue.id);
+        if (prev) {
+          lastError = prev.error ?? null;
+          lastHookOutput = prev.hookOutput ?? null;
+        }
+      }
+
       const promptContent = liquid.parseAndRenderSync(wf.promptTemplate, {
         issue: {
           ...issue,
@@ -373,6 +387,8 @@ export class Orchestrator {
           updatedAt: issue.updatedAt.toISOString(),
         },
         attempt: attempt || null,
+        last_error: lastError,
+        last_hook_output: lastHookOutput,
         config: wf.config,
         project_root: this.workspace.getProjectRoot(),
         tasks_dir: tasksDir,
@@ -390,6 +406,19 @@ export class Orchestrator {
         issue.parent,
       );
       this.store.updateRunStatus(runId, 'running');
+
+      // Snapshot task files before the agent runs so we can detect
+      // decomposition afterward (new files appearing in tasks_dir).
+      const taskFilesBefore = new Set<string>();
+      if (tasksDir) {
+        try {
+          for (const f of fs.readdirSync(tasksDir)) {
+            if (f.endsWith('.md')) taskFilesBefore.add(f);
+          }
+        } catch {
+          // tasks dir might not exist yet
+        }
+      }
 
       // Track in memory
       const abortController = new AbortController();
@@ -441,14 +470,36 @@ export class Orchestrator {
       this.running.delete(issue.id);
       this.claimed.delete(issue.id);
 
-      // After-run hook is the verification gate: if it fails, the agent's
-      // work is rejected even when the exit code was 0. Typical use is
-      // running `npm test`, `pytest`, etc. — the hook is how users get
-      // enforced testing without trusting the agent blindly.
-      const hookResult = await this.workspace.runHook('afterRun', ws.path).catch((e) => ({
-        ok: false,
-        output: `after_run hook errored: ${String(e)}`,
-      }));
+      // Decomposition detection: check if the agent created new task files
+      // in tasks_dir (outside the worktree). If it did, this was a planning
+      // run — skip the after_run verification hook since there's no code to
+      // build or test. This prevents false failures on parent tasks that
+      // decompose work into subtasks.
+      let decomposed = false;
+      if (tasksDir && result.exitCode === 0) {
+        try {
+          const taskFilesAfter = fs.readdirSync(tasksDir).filter((f: string) => f.endsWith('.md'));
+          const newFiles = taskFilesAfter.filter((f: string) => !taskFilesBefore.has(f));
+          if (newFiles.length > 0) {
+            decomposed = true;
+            log.info(`Agent created ${newFiles.length} subtask(s) — skipping after_run`, {
+              subtasks: newFiles,
+            });
+          }
+        } catch {
+          // tasks dir read failed — not a decomposition
+        }
+      }
+
+      let hookResult: { ok: boolean; output: string };
+      if (decomposed) {
+        hookResult = { ok: true, output: '' };
+      } else {
+        hookResult = await this.workspace.runHook('afterRun', ws.path).catch((e) => ({
+          ok: false,
+          output: `after_run hook errored: ${String(e)}`,
+        }));
+      }
 
       // If the after_run hook produced any output (pass or fail), persist it
       // on the run record so the dashboard can show the full build log.
@@ -503,9 +554,12 @@ export class Orchestrator {
         // Either the agent exited non-zero OR the after_run verification hook
         // rejected its work. Either way, treat it as a failed attempt.
         const hookFailed = !hookResult.ok;
+        // Use the TAIL of the hook output (not the head) for the error message.
+        // Build tools print progress first and errors last; the head shows
+        // "✓ success" while the actual error is past the 500-char cutoff.
         const errMsg = hookFailed
-          ? `after_run failed: ${hookResult.output.slice(0, 500)}`
-          : result.stderr.slice(0, 500) || `exit code ${result.exitCode}`;
+          ? `after_run failed: ${hookResult.output.slice(-500)}`
+          : result.stderr.slice(-500) || `exit code ${result.exitCode}`;
         this.store.finishRun(runId, 'failed', result.exitCode, errMsg, hookOutput);
         if (hookFailed && result.exitCode === 0) {
           log.warn('Agent exited 0 but after_run hook rejected the work', {
@@ -518,23 +572,43 @@ export class Orchestrator {
           });
         }
 
-        // Stuck-loop detection: if the last 3 failures all have the same
-        // error, the agent can't self-correct. Give up instead of burning
-        // API credits on an infinite retry loop.
-        const STUCK_THRESHOLD = 3;
-        const recentErrors = this.store.getRecentErrors(issue.id, STUCK_THRESHOLD);
-        if (
-          recentErrors.length >= STUCK_THRESHOLD &&
-          recentErrors.every((e) => e === recentErrors[0])
-        ) {
+        // Stuck-loop detection. Two triggers:
+        // 1. Last 3 failures have the identical error → agent can't self-correct
+        // 2. 5+ total failures → agent is thrashing between different errors
+        // Either way, give up to stop burning API credits.
+        const SAME_ERROR_THRESHOLD = 3;
+        const TOTAL_FAILURE_CAP = 5;
+        const normalizeError = (e: string): string =>
+          e
+            .replace(/\d{2}:\d{2}:\d{2}/g, 'HH:MM:SS')
+            .replace(/\d{4}-\d{2}-\d{2}/g, 'YYYY-MM-DD')
+            .replace(/\.cacophony\/worktrees\/[^/\s]+/g, '.cacophony/worktrees/<id>')
+            .replace(/\d+ms/g, 'Nms');
+        const recentErrors = this.store.getRecentErrors(issue.id, TOTAL_FAILURE_CAP);
+        const normalized = recentErrors.map(normalizeError);
+        const sameErrorLoop =
+          normalized.length >= SAME_ERROR_THRESHOLD &&
+          normalized.slice(0, SAME_ERROR_THRESHOLD).every((e) => e === normalized[0]);
+        const tooManyFailures = recentErrors.length >= TOTAL_FAILURE_CAP;
+        if (sameErrorLoop || tooManyFailures) {
+          const reason = sameErrorLoop
+            ? `${SAME_ERROR_THRESHOLD} identical failures`
+            : `${recentErrors.length} total failures (thrashing)`;
           log.error(
-            `Giving up on ${issue.identifier} after ${STUCK_THRESHOLD} identical failures. ` +
-              `The agent cannot self-correct this error. Create a targeted fix task with specific instructions.`,
+            `Giving up on ${issue.identifier} after ${reason}. ` +
+              `The agent cannot resolve this. Create a targeted fix task with specific instructions.`,
           );
           this.claimed.delete(issue.id);
           this.retryEngine.cancel(issue.id);
-          // Leave the task file in place (still 'todo') so the user sees it
-          // in the dashboard and can queue a follow-up. Don't auto-delete.
+          // Move to a terminal state so the next poll doesn't re-dispatch it.
+          // 'wontfix' is in the default terminalStates so fetchCandidates
+          // will skip it. The user can change it back to 'todo' from the
+          // dashboard if they want to retry with a different approach.
+          if (this.tracker.setIssueState) {
+            await this.tracker.setIssueState(issue.id, 'wontfix').catch((e) => {
+              log.warn('Failed to mark stuck task as wontfix', { error: String(e) });
+            });
+          }
         } else {
           this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
         }

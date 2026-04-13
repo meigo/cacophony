@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { loadWorkflow, validateConfig, ConfigManager } from '../src/config.js';
+import { loadWorkflow, validateConfig, ConfigManager, updateConfigHooks } from '../src/config.js';
 import { Logger } from '../src/logger.js';
 import { tmpDir, writeFile, cleanup, fixturePath } from './helpers.js';
 
@@ -251,5 +251,83 @@ Hello v2`,
 
     mgr.reload();
     expect(notified).toBe(true);
+  });
+});
+
+describe('updateConfigHooks', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  it('adds after_run hook to a config with no hooks', () => {
+    const wfPath = writeFile(
+      dir,
+      'config.md',
+      `---
+tracker:
+  kind: files
+agent:
+  command: "echo test"
+---
+Hello`,
+    );
+
+    updateConfigHooks(wfPath, { after_run: 'npm test && npm run build' });
+
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    expect(content).toContain('after_run');
+    expect(content).toContain('npm test && npm run build');
+    // Prompt template body is preserved
+    expect(content).toContain('Hello');
+    // Existing config is preserved
+    expect(content).toContain('echo test');
+  });
+
+  it('merges into existing hooks without clobbering other fields', () => {
+    const wfPath = writeFile(
+      dir,
+      'config.md',
+      `---
+agent:
+  command: "echo test"
+hooks:
+  timeout_ms: 120000
+  after_create: "npm install"
+---
+Prompt body`,
+    );
+
+    updateConfigHooks(wfPath, { after_run: 'npm test' });
+
+    const wf = loadWorkflow(wfPath);
+    expect(wf.config.hooks.afterCreate).toBe('npm install');
+    expect(wf.config.hooks.afterRun).toBe('npm test');
+    expect(wf.config.hooks.timeoutMs).toBe(120000);
+    expect(wf.promptTemplate).toContain('Prompt body');
+  });
+
+  it('overwrites an existing after_run value', () => {
+    const wfPath = writeFile(
+      dir,
+      'config.md',
+      `---
+agent:
+  command: "echo test"
+hooks:
+  after_run: "old command"
+---
+Body`,
+    );
+
+    updateConfigHooks(wfPath, { after_run: 'new command' });
+
+    const wf = loadWorkflow(wfPath);
+    expect(wf.config.hooks.afterRun).toBe('new command');
   });
 });

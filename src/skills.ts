@@ -104,16 +104,21 @@ export function installSkillPack(
       fileCount += countFiles(dstSkills);
     }
 
-    // Copy AGENTS.md if it exists
+    // Copy AGENTS.md if it exists in the pack AND doesn't already exist
+    // in the project (don't clobber user's custom AGENTS.md).
     const agentsMd = path.join(tmpDir, 'AGENTS.md');
     if (fs.existsSync(agentsMd)) {
       const dst = path.join(projectRoot, 'AGENTS.md');
-      fs.copyFileSync(agentsMd, dst);
-      // Rewrite references in AGENTS.md too
-      let content = fs.readFileSync(dst, 'utf-8');
-      content = content.replaceAll(pack.sourceDir + '/', '.claude/');
-      fs.writeFileSync(dst, content, 'utf-8');
-      fileCount++;
+      if (fs.existsSync(dst)) {
+        logger.info('AGENTS.md already exists in project, skipping (not overwriting)');
+      } else {
+        fs.copyFileSync(agentsMd, dst);
+        // Rewrite references in AGENTS.md too
+        let content = fs.readFileSync(dst, 'utf-8');
+        content = content.replaceAll(pack.sourceDir + '/', '.claude/');
+        fs.writeFileSync(dst, content, 'utf-8');
+        fileCount++;
+      }
     }
 
     // Copy supporting config files if they exist

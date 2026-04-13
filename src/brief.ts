@@ -62,15 +62,16 @@ Your job: decide whether this task is clear enough for a coding agent to execute
 
 The "frameworks" array should list any specific game engine or framework the task targets, using lowercase identifiers: "defold", "godot", "unity", "unreal", "nextjs", "sveltekit", "astro", "flutter", etc. Omit the field or use an empty array if no specific framework is involved (e.g. a plain CLI tool, a vanilla HTML page, or a generic library).
 
-The "suggestedHooks" object should contain an "after_run" shell command that verifies the project builds and passes tests for the detected stack. Choose the standard tools for the framework — for example:
-- SvelteKit: "npx svelte-check && npx vitest run && npx biome check ."
-- Next.js: "npm run build && npm run lint"
-- Astro: "npm run build && npm run check"
+The "suggestedHooks" object should contain an "after_run" shell command that verifies the project builds, passes tests, AND passes linting for the detected stack. Always include a linter — prefer Biome (fast, all-in-one) for JS/TS projects unless the user specifies otherwise. Examples:
+- SvelteKit: "npx svelte-check && npx vitest run && npx biome check --write ."
+- Next.js: "npm run build && npm run lint && npx vitest run"
+- Astro: "npm run build && npx astro check && npx biome check --write ."
 - Rust: "cargo build && cargo test && cargo clippy"
 - Go: "go build ./... && go test ./... && go vet ./..."
 - Python: "pytest && ruff check ."
 - Defold: "java -jar bob.jar build"
-- Generic Node.js: "npm run build && npm test"
+- Generic Node.js: "npm run build && npm test && npx biome check --write ."
+If the user hasn't specified a linting preference and the task involves a JS/TS project, include a clarification question asking which linting tools to use (options: "Biome", "ESLint + Prettier", "None"). Include their choice in the suggestedHooks.
 Omit suggestedHooks if no specific verification is needed or if the stack is unknown.
 
 - If NO, ask up to 3 short, focused clarifying questions, EACH with 2-4 short, mutually exclusive options the user can pick from. Prefer clickable options over free-form questions — users will click faster than they can type. Return ONLY this JSON:

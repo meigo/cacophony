@@ -268,10 +268,26 @@ After writing the files, exit cleanly. Cacophony will pick up the subtasks on th
 5. **Commit** your work on this branch. Cacophony will auto-commit anything you forget, but explicit commits give cleaner history.
 6. **Exit cleanly** when done. Cacophony will mark the task complete, run its verification hook, and clean up the worktree.
 
-A task is not done when the code compiles. A task is done when the code compiles, runs, is covered by tests that actually exercise it, and the full suite is green.
+**Defensive coding:** never assume external data (APIs, user input, database results, file contents) has all fields present and non-null. Use nullish coalescing (\`??\`), optional chaining (\`?.\`), or explicit guards before accessing properties. If a type says \`number\` but the data comes from a JSON API, treat it as \`number | null\` in practice. One missing null check is worse than ten redundant ones.
+
+A task is not done when the code compiles. A task is done when the code compiles, runs with real data without crashing, is covered by tests that actually exercise it, and the full suite is green.
 
 {% if attempt %}
-This is retry attempt #{{attempt}}. The worktree may contain previous work — continue from where it left off. If the previous attempt failed the verification hook (build / test failure), read the error carefully and fix the underlying cause rather than masking it.
+## Retry attempt #{{attempt}}
+
+The previous attempt failed. The worktree contains your previous work — do NOT start from scratch. Read the error below, identify the specific root cause, and make the minimum targeted fix.
+
+{% if last_error %}
+**Previous error:**
+{{ last_error }}
+{% endif %}
+
+{% if last_hook_output %}
+**Full build/test output from previous run:**
+{{ last_hook_output }}
+{% endif %}
+
+Do NOT rewrite files that are already correct. Focus only on the files and lines mentioned in the error. If the error is a type mismatch, fix the type. If it is a missing import, add the import. If it is a wrong API usage, check the docs. Make the smallest change that fixes the specific error.
 {% endif %}
 `;
 
@@ -641,6 +657,79 @@ function startHttpServer(
         const purged = orchestrator.purgeByIdentifier(identifier);
         const anything = fileDeleted || purged.runs > 0 || purged.issues > 0 || purged.retries > 0;
         json(anything ? 200 : 404, { fileDeleted, ...purged, identifier });
+        return;
+      }
+
+      // --- Preview: serve static files from a worktree's build output ---
+      const previewMatch = url.pathname.match(/^\/preview\/([^/]+)(\/.*)?$/);
+      if (req.method === 'GET' && previewMatch) {
+        const identifier = decodeURIComponent(previewMatch[1]);
+        const filePath = previewMatch[2] || '/index.html';
+        const projectRoot = path.resolve(configManager.getCurrent().config.workspace.projectRoot);
+        const worktreeBase = path.join(projectRoot, '.cacophony', 'worktrees');
+
+        // Sanitize the identifier the same way workspace.ts does
+        const sanitized = identifier
+          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .replace(/\.{2,}/g, '_')
+          .replace(/^\.+/, '_')
+          .replace(/\.+$/, '_');
+        const wsPath = path.join(worktreeBase, sanitized);
+
+        // Look for the file in common build output dirs, then worktree root
+        const candidates = [
+          path.join(wsPath, 'dist', filePath),
+          path.join(wsPath, 'build', filePath),
+          path.join(wsPath, 'out', filePath),
+          path.join(wsPath, filePath),
+        ];
+
+        let found: string | null = null;
+        for (const c of candidates) {
+          const resolved = path.resolve(c);
+          // Safety: must be under the worktree
+          if (!resolved.startsWith(path.resolve(wsPath))) continue;
+          if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+            found = resolved;
+            break;
+          }
+          // Try index.html in directories
+          if (filePath.endsWith('/') || !path.extname(filePath)) {
+            const idx = path.join(resolved, 'index.html');
+            if (fs.existsSync(idx) && fs.statSync(idx).isFile()) {
+              found = idx;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          res.writeHead(404);
+          res.end('Not found');
+          return;
+        }
+
+        const ext = path.extname(found).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          '.html': 'text/html',
+          '.css': 'text/css',
+          '.js': 'application/javascript',
+          '.mjs': 'application/javascript',
+          '.json': 'application/json',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif',
+          '.svg': 'image/svg+xml',
+          '.ico': 'image/x-icon',
+          '.woff': 'font/woff',
+          '.woff2': 'font/woff2',
+          '.ttf': 'font/ttf',
+          '.webp': 'image/webp',
+        };
+        res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+        res.writeHead(200);
+        res.end(fs.readFileSync(found));
         return;
       }
 

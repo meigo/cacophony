@@ -91,15 +91,19 @@ export function dashboardHtml(): string {
   .conn.dead .conn-dot { background: var(--red); }
 
   /* Stats */
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-bottom: 1.5rem; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 1.5rem; }
   .stat {
     background: var(--bg-elev); border: 1px solid var(--border);
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 1rem; cursor: pointer;
+    transition: border-color 0.15s;
   }
+  .stat:hover { border-color: var(--border-strong); }
+  .stat.selected { border-color: var(--text); }
   .stat-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
   .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; color: var(--text); }
   .stat-value.running { color: var(--green); }
   .stat-value.failed { color: var(--red); }
+  .stat-sub { font-size: 0.65rem; color: var(--text-dim); margin-top: 2px; }
 
   /* Create task */
   .creator {
@@ -183,11 +187,13 @@ export function dashboardHtml(): string {
   }
   .task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task-meta { font-size: 0.7rem; color: var(--text-faint); white-space: nowrap; }
-  .blocked-tag {
-    font-size: 0.65rem; font-weight: 600; color: var(--text-dim);
+  .blocked-tag, .failed-tag {
+    font-size: 0.65rem; font-weight: 600;
     padding: 1px 6px; background: var(--bg); border: 1px solid var(--border);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
+  .blocked-tag { color: var(--text-dim); }
+  .failed-tag { color: var(--red); border-color: var(--red); }
   .task-actions {
     display: flex; gap: 4px; opacity: 0.4;
     transition: opacity 0.15s;
@@ -369,12 +375,17 @@ export function dashboardHtml(): string {
   .skill-suggestion-actions {
     display: flex; gap: 0.5rem; justify-content: flex-end;
   }
+  .brief-hint {
+    font-size: 0.7rem; color: var(--text-faint);
+    width: 100%; margin-bottom: 0.5rem;
+  }
   .hook-suggestion-cmd {
-    font-size: 0.75rem; color: var(--text);
+    display: block; width: 100%;
+    font-family: inherit; font-size: 0.75rem; color: var(--text);
     padding: 0.5rem 0.75rem; margin-bottom: 0.75rem;
     background: var(--bg); border: 1px solid var(--border);
-    white-space: pre-wrap; word-break: break-all;
   }
+  .hook-suggestion-cmd:focus { outline: none; border-color: var(--text); }
 
   /* Keyboard hint */
   kbd {
@@ -408,21 +419,18 @@ export function dashboardHtml(): string {
     </div>
   </header>
 
-  <!-- Stats -->
+  <!-- Stats — clickable to jump to the corresponding filter tab -->
   <div class="stats">
-    <div class="stat">
-      <div class="stat-label">Running</div>
-      <div class="stat-value running" x-text="running.length"></div>
+    <div class="stat" @click="filter = 'active'" :class="{selected: filter === 'active'}">
+      <div class="stat-label">Active</div>
+      <div class="stat-value running" x-text="running.length + retrying.length"></div>
+      <div class="stat-sub" x-show="retrying.length > 0" x-text="retrying.length + ' retrying'"></div>
     </div>
-    <div class="stat">
-      <div class="stat-label">Retrying</div>
-      <div class="stat-value" x-text="retrying.length"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Succeeded</div>
+    <div class="stat" @click="filter = 'done'" :class="{selected: filter === 'done'}">
+      <div class="stat-label">Done</div>
       <div class="stat-value" x-text="succeededCount"></div>
     </div>
-    <div class="stat">
+    <div class="stat" @click="filter = 'failed'" :class="{selected: filter === 'failed'}">
       <div class="stat-label">Failed</div>
       <div class="stat-value failed" x-text="failedCount"></div>
     </div>
@@ -501,9 +509,10 @@ export function dashboardHtml(): string {
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="cancelBrief()">Cancel</button>
-        <button class="btn" @click="skipBriefNow()">Skip, run as-is</button>
-        <button class="btn primary" :disabled="runBusy" @click="continueBrief()" x-text="runBusy ? 'Refining…' : 'Continue'"></button>
+        <div class="brief-hint">Unanswered questions will be decided by the agent.</div>
+        <button class="btn" @click="cancelBrief()">Back</button>
+        <button class="btn" @click="skipBriefNow()">Agent's best guess</button>
+        <button class="btn primary" :disabled="runBusy" @click="continueBrief()" x-text="runBusy ? 'Refining…' : 'Submit answers'"></button>
       </div>
     </div>
   </div>
@@ -516,7 +525,7 @@ export function dashboardHtml(): string {
     <div class="skill-suggestion-desc">
       Configure automatic build + test verification for this project?
     </div>
-    <div class="hook-suggestion-cmd" x-text="hookSuggestion?.after_run || ''"></div>
+    <input type="text" class="hook-suggestion-cmd" x-model="hookSuggestion.after_run">
     <div class="skill-suggestion-actions">
       <button class="btn" @click="skipHooksAndRun()">Skip</button>
       <button class="btn primary" :disabled="runBusy" @click="applyHooksAndRun()" x-text="runBusy ? 'Applying…' : 'Apply & Run'"></button>
@@ -539,6 +548,9 @@ export function dashboardHtml(): string {
   <div class="filters">
     <button class="filter-btn" :class="{active: filter === 'active'}" @click="filter = 'active'">
       Active <span class="count" x-text="counts.active"></span>
+    </button>
+    <button class="filter-btn" :class="{active: filter === 'failed'}" @click="filter = 'failed'">
+      Failed <span class="count" x-text="counts.failed"></span>
     </button>
     <button class="filter-btn" :class="{active: filter === 'done'}" @click="filter = 'done'">
       Done <span class="count" x-text="counts.done"></span>
@@ -564,10 +576,14 @@ export function dashboardHtml(): string {
         <div class="task-title" x-text="t.title"></div>
 
         <span class="blocked-tag" x-show="(t.blockedBy?.length || 0) > 0" :title="'Blocked by: ' + t.blockedBy.map(b => b.identifier).join(', ')">blocked</span>
+        <span class="failed-tag" x-show="hasFailed(t)">failed</span>
 
         <div class="task-meta" x-text="timeAgo(t.updatedAt || t.createdAt)"></div>
 
         <div class="task-actions" @click.stop>
+          <template x-if="!t._historical && !isDone(t)">
+            <a class="icon-btn" :href="'/preview/' + encodeURIComponent(t.identifier) + '/'" target="_blank" title="Preview" @click.stop>◎</a>
+          </template>
           <template x-if="isRunning(t)">
             <button class="icon-btn" @click="stopRun(t.identifier)" title="Stop">■</button>
           </template>
@@ -610,7 +626,7 @@ export function dashboardHtml(): string {
           <div class="modal-label">Blocked by</div>
           <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
             <template x-for="b in selected?.blockedBy || []">
-              <span class="priority-badge" x-text="b.identifier + ' (' + b.state + ')'"></span>
+              <span class="blocked-tag" x-text="b.identifier + ' (' + b.state + ')'"></span>
             </template>
           </div>
         </div>
@@ -786,6 +802,18 @@ function app() {
         };
       });
     },
+    // Set of identifiers that have at least one unresolved failure (no subsequent success).
+    // Reused by the Failed tab filter and the failedCount getter.
+    get _failedIdentifiers() {
+      const succeeded = new Set(this.runs.filter(r => r.status === 'succeeded').map(r => r.issueIdentifier));
+      const failed = new Set();
+      for (const r of this.runs) {
+        if ((r.status === 'failed' || r.status === 'timed_out') && !succeeded.has(r.issueIdentifier)) {
+          failed.add(r.issueIdentifier);
+        }
+      }
+      return failed;
+    },
     get filteredTasks() {
       const term = this.search.toLowerCase().trim();
       let list;
@@ -794,6 +822,12 @@ function app() {
         list = this.historicalDoneTasks;
       } else if (this.filter === 'active') {
         list = this.tasks.filter(t => this.activeStates.includes(t.state));
+      } else if (this.filter === 'failed') {
+        // Failed tab: task files with unresolved failures, excluding tasks that
+        // are currently running (those show in Active instead — they're being
+        // retried, not stuck).
+        const failedIds = this._failedIdentifiers;
+        list = this.tasks.filter(t => failedIds.has(t.identifier) && !this.isRunning(t));
       } else {
         // 'all': merge active task files with historical done runs
         const activeIds = new Set(this.tasks.map(t => t.identifier));
@@ -840,11 +874,13 @@ function app() {
     },
     get counts() {
       const active = this.tasks.filter(t => this.activeStates.includes(t.state)).length;
+      const failed = this.tasks.filter(t => this._failedIdentifiers.has(t.identifier)).length;
       const done = this.historicalDoneTasks.length;
       const activeIds = new Set(this.tasks.map(t => t.identifier));
       const historicalUnique = this.historicalDoneTasks.filter(t => !activeIds.has(t.identifier)).length;
       return {
         active,
+        failed,
         done,
         all: this.tasks.length + historicalUnique,
       };
@@ -861,14 +897,16 @@ function app() {
       return n;
     },
     get failedCount() {
-      const runningIds = new Set(this.running.map(r => r.identifier));
+      // Count unique task identifiers that have at least one failed/timed_out
+      // run and have NOT yet succeeded. Don't exclude currently-running tasks
+      // — a task being retried should stay in the failed count until it
+      // actually succeeds, not flicker to 0 every time a retry starts.
       const succeeded = new Set(this.runs.filter(r => r.status === 'succeeded').map(r => r.issueIdentifier));
       const seen = new Set();
       let n = 0;
       for (const r of this.runs) {
         if ((r.status === 'failed' || r.status === 'timed_out')
             && !succeeded.has(r.issueIdentifier)
-            && !runningIds.has(r.issueIdentifier)
             && !seen.has(r.issueIdentifier)) {
           seen.add(r.issueIdentifier);
           n++;
@@ -1077,11 +1115,11 @@ function app() {
       await this.submitTask(prompt);
     },
 
-    skipHooksAndRun() {
+    async skipHooksAndRun() {
       if (!this.hookSuggestion) return;
       const { prompt } = this.hookSuggestion;
       this.hookSuggestion = null;
-      this.submitTask(prompt);
+      await this.submitTask(prompt);
     },
 
     async installSkillsAndRun() {
@@ -1110,10 +1148,12 @@ function app() {
     },
 
     cancelBrief() {
-      // Invalidate any in-flight brief call.
+      // Invalidate any in-flight brief call and clear any pending suggestions.
       this.briefGen++;
       this.runBusy = false;
       this.brief = null;
+      this.skillSuggestion = null;
+      this.hookSuggestion = null;
     },
 
     async submitTask(prompt) {

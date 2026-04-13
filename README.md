@@ -27,7 +27,7 @@ npm install
 npm run build
 ```
 
-Requires Node.js 18+ and Git.
+Requires Node.js 18+ and Git. On Windows, Git for Windows is required — cacophony runs hook scripts via Git Bash (`bash.exe`), not `cmd.exe` or PowerShell, so bash syntax (`&&`, `$()`, pipes) works cross-platform.
 
 ## Quick start
 
@@ -155,7 +155,14 @@ Typical uses:
 ```yaml
 hooks:
   after_create: |
-    npm install --prefer-offline
+    # Fast dep bootstrap: clone node_modules from the main checkout via
+    # copy-on-write (macOS APFS) or fallback copy. Instant instead of
+    # running npm install per worktree.
+    if [ -d ../../../node_modules ]; then
+      cp -Rc ../../../node_modules . 2>/dev/null || cp -r ../../../node_modules .
+    else
+      npm install --prefer-offline
+    fi
   after_run: |
     npm run lint && npm run typecheck && npm test
 ```
@@ -295,6 +302,8 @@ The body of `.cacophony/config.md` (below the front matter) is a [Liquid](https:
 | `issue.url` | string or null | Link to the issue, if any |
 | `issue.labels` | string[] | All labels (lowercase) |
 | `attempt` | number or null | Retry attempt number (null on first run) |
+| `last_error` | string or null | Error message from the previous failed run (only on retries) |
+| `last_hook_output` | string or null | Full build/test output from the previous failed run (up to 10KB, only on retries) |
 | `config` | object | Full config from `.cacophony/config.md` |
 | `tasks_dir` | string | Absolute path to `.cacophony/tasks/` (used by agents that self-decompose) |
 | `project_root` | string | Absolute path to the project root |
@@ -384,6 +393,9 @@ The dashboard is a single-file Alpine.js app served from the daemon. Monospaced 
 | `PUT` | `/api/v1/tasks/:id/state` | Update task state `{ state }` |
 | `DELETE` | `/api/v1/tasks/:id` | Delete task (removes the .md file, all runs, issues cache, pending retries) |
 | `POST` | `/api/v1/stop/:id` | Cancel running agent |
+| `POST` | `/api/v1/skills/install` | Install a community skill pack `{ framework }` (clones, renames, commits) |
+| `GET` | `/api/v1/skills/status` | Check if skills are installed `{ installed: boolean }` |
+| `POST` | `/api/v1/config/hooks` | Update verification hooks `{ after_run }` (merges into config YAML, triggers hot-reload) |
 
 ## Development
 
@@ -401,15 +413,18 @@ npm run check            # Full pipeline: lint + format + test + build
 
 ```
 src/
-  index.ts              CLI entry point (init/start/status/stop)
+  index.ts              CLI entry point (init/start/status/stop), HTTP server + API
   orchestrator.ts       Poll loop, dispatch, reconciliation, blocker enforcement
   config.ts             Config file parser, validator, hot-reload watcher
   state.ts              SQLite store (runs, retries, issues, metrics)
   workspace.ts          Git worktree lifecycle, hooks, safety checks
   runner.ts             Agent subprocess management
   retry.ts              Exponential backoff, persistence, timer restoration
+  brief.ts              Pre-task LLM intake (clarify or ready, framework detection)
+  skills.ts             Community skill pack registry, clone + install
+  slug.ts               Prompt-to-identifier slug generation
   logger.ts             Structured JSON logging, terminal status
-  dashboard.ts          Inline Alpine.js web dashboard
+  dashboard.ts          Inline Alpine.js web dashboard (dark/light, brief modal, etc.)
   types.ts              Shared type definitions
   trackers/
     interface.ts        TrackerAdapter interface, factory
