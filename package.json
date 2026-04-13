@@ -1,7 +1,7 @@
 {
   "name": "cacophony",
   "version": "0.1.0",
-  "description": "Provider-agnostic agent orchestrator. A chaotic mess of agents doing their thing.",
+  "description": "Autonomous multi-agent coding on autopilot. An outer-loop harness for CLI coding agents.",
   "type": "module",
   "bin": {
     "cacophony": "./dist/index.js"
