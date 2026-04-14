@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { RunRecord, RunStatus, Issue, RetryEntry } from './types.js';
+import type { RunRecord, RunStatus, MergeStatus, Issue, RetryEntry } from './types.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS runs (
   error           TEXT,
   hook_output     TEXT,
   exit_code       INTEGER,
-  duration_ms     INTEGER
+  duration_ms     INTEGER,
+  merge_status    TEXT,
+  merge_reason    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS issues (
@@ -91,6 +93,12 @@ export class StateStore {
     if (!runColumnNames.includes('parent')) {
       this.db.exec(`ALTER TABLE runs ADD COLUMN parent TEXT`);
     }
+    if (!runColumnNames.includes('merge_status')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN merge_status TEXT`);
+    }
+    if (!runColumnNames.includes('merge_reason')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN merge_reason TEXT`);
+    }
 
     // Runs
     this.stmtCreateRun = this.db.prepare(`
@@ -102,13 +110,15 @@ export class StateStore {
     `);
     this.stmtFinishRun = this.db.prepare(`
       UPDATE runs SET status = ?, exit_code = ?, error = ?, hook_output = ?,
+        merge_status = ?, merge_reason = ?,
         finished_at = datetime('now'),
         duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
       WHERE id = ?
     `);
     const runColumns = `id, issue_id AS issueId, issue_identifier AS issueIdentifier, attempt,
              workspace_path AS workspacePath, prompt, parent, started_at AS startedAt, finished_at AS finishedAt,
-             status, error, hook_output AS hookOutput, exit_code AS exitCode, duration_ms AS durationMs`;
+             status, error, hook_output AS hookOutput, exit_code AS exitCode, duration_ms AS durationMs,
+             merge_status AS mergeStatus, merge_reason AS mergeReason`;
     this.stmtGetActiveRuns = this.db.prepare(`
       SELECT ${runColumns} FROM runs WHERE status IN ('preparing_workspace', 'building_prompt', 'launching_agent', 'running')
     `);
@@ -201,8 +211,18 @@ export class StateStore {
     exitCode?: number | null,
     error?: string,
     hookOutput?: string | null,
+    mergeStatus?: MergeStatus | null,
+    mergeReason?: string | null,
   ): void {
-    this.stmtFinishRun.run(status, exitCode ?? null, error ?? null, hookOutput ?? null, runId);
+    this.stmtFinishRun.run(
+      status,
+      exitCode ?? null,
+      error ?? null,
+      hookOutput ?? null,
+      mergeStatus ?? null,
+      mergeReason ?? null,
+      runId,
+    );
   }
 
   getActiveRuns(): RunRecord[] {

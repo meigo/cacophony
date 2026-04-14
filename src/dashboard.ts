@@ -192,6 +192,11 @@ export function dashboardHtml(): string {
   }
   .blocked-tag { color: var(--text-dim); }
   .failed-tag { color: var(--red); border-color: var(--red); }
+  .merge-tag {
+    font-size: 0.65rem; padding: 1px 6px; text-transform: uppercase;
+    letter-spacing: 0.05em; border: 1px solid var(--amber, #d97706);
+    color: var(--amber, #d97706);
+  }
   .pending-tag { color: var(--text-dim); }
   .task-actions {
     display: flex; gap: 4px; opacity: 0.4;
@@ -277,6 +282,17 @@ export function dashboardHtml(): string {
   .run-item .status.failed,
   .run-item .status.timed_out { color: var(--red); border-color: var(--red); }
   .run-item .status.canceled { color: var(--text-dim); border-color: var(--border-strong); }
+  .run-item .merge-status {
+    font-weight: 700; padding: 1px 8px; font-size: 0.65rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    border: 1px solid var(--amber, #d97706); color: var(--amber, #d97706);
+  }
+  .merge-note {
+    font-size: 0.7rem; color: var(--text);
+    margin-top: 4px; padding: 6px 10px;
+    background: var(--bg); border: 1px solid var(--amber, #d97706); border-left-width: 3px;
+    white-space: pre-wrap; word-break: break-word;
+  }
   .run-meta { color: var(--text-faint); margin-left: auto; font-variant-numeric: tabular-nums; }
   .run-error {
     font-size: 0.7rem; color: var(--text);
@@ -667,6 +683,7 @@ export function dashboardHtml(): string {
         <span class="blocked-tag" x-show="(t.blockedBy?.length || 0) > 0" :title="'Blocked by: ' + t.blockedBy.map(b => b.identifier).join(', ')">blocked</span>
         <span class="failed-tag" x-show="hasFailed(t)">failed</span>
         <span class="blocked-tag pending-tag" x-show="isPending(t)">pending</span>
+        <span class="merge-tag" x-show="needsMerge(t)" title="Agent succeeded but auto-merge was skipped. Branch preserved for manual merge.">needs merge</span>
 
         <div class="task-meta" x-text="timeAgo(t.updatedAt || t.createdAt)"></div>
 
@@ -728,10 +745,16 @@ export function dashboardHtml(): string {
               <div>
                 <div class="run-item">
                   <span class="status" :class="r.status" x-text="r.status"></span>
+                  <span class="merge-status" x-show="hasMergeIssue(r)" x-text="'merge ' + r.mergeStatus"></span>
                   <span x-text="'attempt ' + r.attempt"></span>
                   <span class="run-meta" x-text="duration(r.durationMs) + ' · ' + timeAgo(r.startedAt)"></span>
                 </div>
                 <div class="run-error" x-show="r.error && r.status !== 'succeeded'" x-text="r.error"></div>
+                <div class="merge-note" x-show="hasMergeIssue(r)">
+                  <strong x-text="r.mergeStatus === 'conflict' ? 'Merge conflict — branch preserved' : 'Auto-merge skipped — branch preserved'"></strong>
+                  <span x-show="r.mergeReason" x-text="': ' + r.mergeReason"></span>
+                  <div style="margin-top:4px;color:var(--text-dim)">Land manually: <code x-text="'git merge --no-ff cacophony/' + r.issueIdentifier"></code></div>
+                </div>
                 <details x-show="r.hookOutput" class="run-hook-output">
                   <summary>Build output</summary>
                   <pre x-text="r.hookOutput"></pre>
@@ -1164,6 +1187,15 @@ function app() {
       const latest = this.runs.find(r => r.issueIdentifier === t.identifier);
       return latest && (latest.status === 'failed' || latest.status === 'timed_out');
     },
+    // The latest succeeded run could not auto-merge into main. The code is
+    // on the cacophony/<id> branch; the user has to land it manually.
+    needsMerge(t) {
+      const latestSuccess = this.runs.find(r => r.issueIdentifier === t.identifier && r.status === 'succeeded');
+      return !!latestSuccess && this.hasMergeIssue(latestSuccess);
+    },
+    hasMergeIssue(r) {
+      return r.status === 'succeeded' && !!r.mergeStatus && r.mergeStatus !== 'merged';
+    },
     // A task that was reopened from a failed state — has prior failures but
     // is now back in 'todo' waiting to be re-dispatched.
     isPending(t) {
@@ -1273,14 +1305,21 @@ function app() {
           }
         }
 
-        // Auto-apply suggested hooks in the background (non-blocking).
-        if (result.suggestedHooks?.after_run) {
-          this.toast('Verification hook added', result.suggestedHooks.after_run);
-          fetch('/api/v1/config/hooks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ after_run: result.suggestedHooks.after_run }),
-          }).then(() => this.refresh()).catch(() => {});
+        // Auto-apply suggested hooks in the background (non-blocking). Skip
+        // if the current config already has the same after_run — the brief
+        // re-suggests on every task, and we don't want to re-toast or
+        // overwrite an identical value on each submission.
+        const suggested = result.suggestedHooks?.after_run;
+        if (suggested) {
+          const current = await this.fetch('/api/v1/config').then(c => c?.hooks?.after_run || '').catch(() => '');
+          if (current !== suggested) {
+            this.toast('Verification hook added', suggested);
+            fetch('/api/v1/config/hooks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ after_run: suggested }),
+            }).then(() => this.refresh()).catch(() => {});
+          }
         }
 
         await this.submitTask(prompt);

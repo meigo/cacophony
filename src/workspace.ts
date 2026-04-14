@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import type { HooksConfig } from './types.js';
+import type { HooksConfig, MergeStatus } from './types.js';
 import type { Logger } from './logger.js';
 
 function sanitizeIdentifier(identifier: string): string {
@@ -390,7 +390,7 @@ export class WorkspaceManager {
    * can resolve manually.
    */
   tryMergeIntoBase(issueIdentifier: string): {
-    result: 'merged' | 'conflict' | 'skipped';
+    result: MergeStatus;
     reason?: string;
   } {
     const key = sanitizeIdentifier(issueIdentifier);

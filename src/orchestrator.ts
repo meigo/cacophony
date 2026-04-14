@@ -544,12 +544,8 @@ export class Orchestrator {
           }
         } else {
           // Agent made real changes — normal success path.
-          this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
           log.info('Agent succeeded', { durationMs: result.durationMs });
           if (this.tracker.setIssueState) {
-            // Try to land the work on the base branch first. If the merge is
-            // skipped or conflicts, the cacophony/<id> branch is preserved so
-            // the user can resolve manually.
             const merge = this.workspace.tryMergeIntoBase(issue.identifier);
             if (merge.result === 'merged') {
               log.info('Auto-merged into base branch');
@@ -560,6 +556,17 @@ export class Orchestrator {
             } else {
               log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
             }
+            // Cap reason so a chatty git error can't bloat the DB row.
+            const mergeReason = merge.reason ? merge.reason.slice(0, 500) : null;
+            this.store.finishRun(
+              runId,
+              'succeeded',
+              0,
+              undefined,
+              hookOutput,
+              merge.result,
+              mergeReason,
+            );
 
             // Mark done, then delete the task file (the autonomous flow doesn't
             // need to keep finished prompts around — the merged commits and the
@@ -582,6 +589,7 @@ export class Orchestrator {
             }
           } else {
             // No way to advance state — fall back to continuation pattern.
+            this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
             this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
           }
         }

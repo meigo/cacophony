@@ -106,6 +106,8 @@ export type RunStatus =
   | 'timed_out'
   | 'canceled';
 
+export type MergeStatus = 'merged' | 'skipped' | 'conflict';
+
 export interface RunRecord {
   id: number;
   issueId: string;
@@ -121,6 +123,8 @@ export interface RunRecord {
   hookOutput: string | null;
   exitCode: number | null;
   durationMs: number | null;
+  mergeStatus: MergeStatus | null;
+  mergeReason: string | null;
 }
 
 // === Runtime Entries ===
