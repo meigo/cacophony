@@ -13,6 +13,7 @@ import type {
   PollingConfig,
   BriefConfig,
 } from './types.js';
+import { ISSUE_STATES } from './types.js';
 import type { Logger } from './logger.js';
 
 const DEFAULTS = {
@@ -28,8 +29,8 @@ const DEFAULTS = {
   workspace: { projectRoot: '.' },
   hooks: { timeoutMs: 60_000 },
   tracker: {
-    activeStates: ['todo', 'in-progress'],
-    terminalStates: ['done', 'cancelled', 'wontfix'],
+    activeStates: [ISSUE_STATES.TODO, ISSUE_STATES.IN_PROGRESS],
+    terminalStates: [ISSUE_STATES.DONE, ISSUE_STATES.CANCELLED, ISSUE_STATES.WONTFIX],
   },
   brief: {
     enabled: true,

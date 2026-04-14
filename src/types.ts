@@ -1,5 +1,23 @@
 // === Issue Domain ===
 
+/**
+ * Canonical issue-state values cacophony itself writes (e.g. via
+ * `setIssueState`) or compares against. Trackers may surface other strings;
+ * those pass through untouched. All stored/compared values are lowercase.
+ *
+ * - 'deleted' is a synthetic sentinel returned when a tracker no longer
+ *   knows about an issue (e.g. the task file was deleted). It is never
+ *   persisted — only reported by `fetchIssueStatesByIds`.
+ */
+export const ISSUE_STATES = {
+  TODO: 'todo',
+  IN_PROGRESS: 'in-progress',
+  DONE: 'done',
+  WONTFIX: 'wontfix',
+  CANCELLED: 'cancelled',
+  DELETED: 'deleted',
+} as const;
+
 export interface Issue {
   id: string;
   identifier: string;

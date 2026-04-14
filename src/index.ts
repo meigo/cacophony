@@ -9,6 +9,7 @@ import { StateStore } from './state.js';
 import { Orchestrator } from './orchestrator.js';
 import { Logger } from './logger.js';
 import type { FilesTracker } from './trackers/files.js';
+import { ISSUE_STATES } from './types.js';
 import { slugifyPrompt, uniqueIdentifier } from './slug.js';
 import { runBrief } from './brief.js';
 import { lookupSkillPack, installSkillPack, isSkillInstalled } from './skills.js';
@@ -736,7 +737,7 @@ function startHttpServer(state: ServerState, port: number): void {
           return;
         }
         const identifier = uniqueIdentifier(filesTracker, slugifyPrompt(prompt));
-        filesTracker.createTask(identifier, 'todo', priority ?? null, prompt.trim());
+        filesTracker.createTask(identifier, ISSUE_STATES.TODO, priority ?? null, prompt.trim());
         logger.info(`Task created via API: ${identifier}`);
         // Nudge the orchestrator to dispatch immediately rather than waiting
         // for the next poll cycle.

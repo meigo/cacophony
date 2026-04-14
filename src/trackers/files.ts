@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { TrackerAdapter, TrackerConfig, Issue } from '../types.js';
+import { ISSUE_STATES } from '../types.js';
 
 interface TaskFrontMatter {
   state?: string;
@@ -51,7 +52,7 @@ function parseTaskFile(filePath: string, identifier: string): Issue | null {
     title,
     description,
     priority: frontMatter.priority ?? null,
-    state: (frontMatter.state ?? 'todo').toLowerCase(),
+    state: (frontMatter.state ?? ISSUE_STATES.TODO).toLowerCase(),
     branchName: frontMatter.branch ?? null,
     url: null,
     labels: (frontMatter.labels ?? []).map((l) => l.toLowerCase()),
@@ -70,8 +71,12 @@ export class FilesTracker implements TrackerAdapter {
 
   constructor(config: TrackerConfig) {
     this.dir = path.resolve(config.dir ?? '.cacophony/tasks');
-    this.activeStates = config.activeStates ?? ['todo', 'in-progress'];
-    this.terminalStates = config.terminalStates ?? ['done', 'cancelled', 'wontfix'];
+    this.activeStates = config.activeStates ?? [ISSUE_STATES.TODO, ISSUE_STATES.IN_PROGRESS];
+    this.terminalStates = config.terminalStates ?? [
+      ISSUE_STATES.DONE,
+      ISSUE_STATES.CANCELLED,
+      ISSUE_STATES.WONTFIX,
+    ];
 
     // Create tasks dir if it doesn't exist
     fs.mkdirSync(this.dir, { recursive: true });
@@ -116,7 +121,7 @@ export class FilesTracker implements TrackerAdapter {
                   return {
                     id: ref,
                     identifier: ref,
-                    state: blocker?.state ?? 'deleted',
+                    state: blocker?.state ?? ISSUE_STATES.DELETED,
                   };
                 });
             }
@@ -154,13 +159,13 @@ export class FilesTracker implements TrackerAdapter {
     for (const id of ids) {
       const filePath = this.identifierToFile(id);
       if (!fs.existsSync(filePath)) {
-        results.push({ id, identifier: id, state: 'deleted' });
+        results.push({ id, identifier: id, state: ISSUE_STATES.DELETED });
         continue;
       }
 
       const issue = parseTaskFile(filePath, id);
       if (!issue) {
-        results.push({ id, identifier: id, state: 'deleted' });
+        results.push({ id, identifier: id, state: ISSUE_STATES.DELETED });
         continue;
       }
 

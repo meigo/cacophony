@@ -8,6 +8,7 @@ import type {
   TrackerAdapter,
   RunRecord,
 } from './types.js';
+import { ISSUE_STATES } from './types.js';
 import type { ConfigManager } from './config.js';
 import type { StateStore } from './state.js';
 import { WorkspaceManager } from './workspace.js';
@@ -28,7 +29,7 @@ export function isStillBlocked(issue: Issue, terminalStates: string[]): boolean 
   if (issue.blockedBy.length === 0) return false;
   return issue.blockedBy.some((b) => {
     const s = b.state.toLowerCase();
-    if (s === 'deleted') return false;
+    if (s === ISSUE_STATES.DELETED) return false;
     return !terminalStates.includes(s);
   });
 }
@@ -539,7 +540,7 @@ export class Orchestrator {
                 `The task may need a more specific prompt.`,
             );
             if (this.tracker.setIssueState) {
-              await this.tracker.setIssueState(issue.id, 'wontfix').catch(() => {});
+              await this.tracker.setIssueState(issue.id, ISSUE_STATES.WONTFIX).catch(() => {});
             }
           }
         } else {
@@ -571,7 +572,7 @@ export class Orchestrator {
             // Mark done, then delete the task file (the autonomous flow doesn't
             // need to keep finished prompts around — the merged commits and the
             // run history in SQLite are the durable record).
-            await this.tracker.setIssueState(issue.id, 'done').catch((e) => {
+            await this.tracker.setIssueState(issue.id, ISSUE_STATES.DONE).catch((e) => {
               log.warn('Failed to mark issue done', { error: String(e) });
             });
             if (this.tracker.deleteIssue) {
@@ -648,7 +649,7 @@ export class Orchestrator {
           // will skip it. The user can change it back to 'todo' from the
           // dashboard if they want to retry with a different approach.
           if (this.tracker.setIssueState) {
-            await this.tracker.setIssueState(issue.id, 'wontfix').catch((e) => {
+            await this.tracker.setIssueState(issue.id, ISSUE_STATES.WONTFIX).catch((e) => {
               log.warn('Failed to mark stuck task as wontfix', { error: String(e) });
             });
           }
