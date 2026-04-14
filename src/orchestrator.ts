@@ -16,6 +16,7 @@ import { RetryEngine } from './retry.js';
 import { createTracker } from './trackers/interface.js';
 import type { Logger } from './logger.js';
 import { renderPrompt } from './template.js';
+import { classifyOutcome } from './outcome.js';
 
 /**
  * Returns true if `issue` is still blocked by at least one pending dependency.
@@ -256,6 +257,58 @@ export class Orchestrator {
   }
 
   // --- Private ---
+
+  /**
+   * Wrap up a successful run: try to auto-merge, record the merge outcome on
+   * the run row, mark the issue done, delete the task file, remove the
+   * worktree, and (if merged) delete the feature branch. Assumes the caller
+   * has already verified the tracker supports state transitions.
+   */
+  private async finalizeSuccess(
+    issue: Issue,
+    runId: number,
+    hookOutput: string | null,
+    log: Logger,
+  ): Promise<void> {
+    const merge = this.workspace.tryMergeIntoBase(issue.identifier);
+    if (merge.result === 'merged') {
+      log.info('Auto-merged into base branch');
+    } else if (merge.result === 'conflict') {
+      log.warn('Auto-merge conflict — branch preserved for manual resolution', {
+        reason: merge.reason,
+      });
+    } else {
+      log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
+    }
+    // Cap reason so a chatty git error can't bloat the DB row.
+    const mergeReason = merge.reason ? merge.reason.slice(0, 500) : null;
+    this.store.finishRun(
+      runId,
+      'succeeded',
+      0,
+      undefined,
+      hookOutput,
+      merge.result,
+      mergeReason,
+    );
+
+    await this.tracker.setIssueState!(issue.id, ISSUE_STATES.DONE).catch((e) => {
+      log.warn('Failed to mark issue done', { error: String(e) });
+    });
+    if (this.tracker.deleteIssue) {
+      await this.tracker.deleteIssue(issue.id).catch((e) => {
+        log.warn('Failed to delete done task file', { error: String(e) });
+      });
+    }
+    await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
+      log.warn('Failed to remove worktree after success', { error: String(e) });
+    });
+    // Delete the merged branch only after the worktree is gone — git refuses
+    // to delete a branch that's checked out anywhere.
+    if (merge.result === 'merged') {
+      this.workspace.deleteBranch(issue.identifier);
+    }
+  }
 
   /**
    * Tear down a running entry: abort the subprocess, finalize the run row,
@@ -528,35 +581,29 @@ export class Orchestrator {
       // on the run record so the dashboard can show the full build log.
       const hookOutput = hookResult.output || null;
 
-      if (result.timedOut) {
-        this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out', hookOutput);
-        log.warn('Agent timed out', { durationMs: result.durationMs });
-        this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, 'timeout');
-      } else if (result.exitCode === 0 && hookResult.ok) {
-        // No-changes detection: if the agent exited 0 and the hook passed
-        // but the worktree has zero file changes, the agent didn't actually
-        // do any work. Retry once with a pointed message; give up on the
-        // second no-op to avoid wasting tokens on a comprehension failure.
-        const worktreeClean = this.workspace.isWorktreeClean(ws.path);
-        if (worktreeClean && !decomposed) {
-          const noChangeMsg =
-            'Agent made zero file changes. The task is NOT already complete — ' +
-            're-read the requirements carefully and make the specific changes described. ' +
-            'If you believe the work is already done, explain why in a commit message.';
-          this.store.finishRun(runId, 'failed', 0, noChangeMsg, hookOutput);
-          log.warn('Agent exited 0 but made no file changes', {
-            durationMs: result.durationMs,
-          });
-          // Only retry once for no-changes — a second no-op means the agent
-          // can't understand the task, not that it needs more time.
-          if (attempt === 0) {
-            this.retryEngine.scheduleFailureRetry(
-              issue.id,
-              issue.identifier,
-              attempt + 1,
-              noChangeMsg,
-            );
-          } else {
+      const outcome = classifyOutcome({
+        timedOut: result.timedOut,
+        exitCode: result.exitCode,
+        hookOk: hookResult.ok,
+        hookOutput: hookResult.output,
+        stderr: result.stderr,
+        worktreeClean: this.workspace.isWorktreeClean(ws.path),
+        decomposed,
+        attempt,
+        recentErrors: this.store.getRecentErrors(issue.id, 5),
+      });
+
+      switch (outcome.kind) {
+        case 'timeout': {
+          this.store.finishRun(runId, 'timed_out', result.exitCode, 'Agent timed out', hookOutput);
+          log.warn('Agent timed out', { durationMs: result.durationMs });
+          this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, 'timeout');
+          break;
+        }
+        case 'no-changes': {
+          this.store.finishRun(runId, 'failed', 0, outcome.message, hookOutput);
+          log.warn('Agent exited 0 but made no file changes', { durationMs: result.durationMs });
+          if (outcome.giveUp) {
             log.error(
               `Giving up on ${issue.identifier} — agent made no changes on two attempts. ` +
                 `The task may need a more specific prompt.`,
@@ -564,119 +611,62 @@ export class Orchestrator {
             if (this.tracker.setIssueState) {
               await this.tracker.setIssueState(issue.id, ISSUE_STATES.WONTFIX).catch(() => {});
             }
+          } else {
+            this.retryEngine.scheduleFailureRetry(
+              issue.id,
+              issue.identifier,
+              attempt + 1,
+              outcome.message,
+            );
           }
-        } else {
-          // Agent made real changes — normal success path.
+          break;
+        }
+        case 'success': {
           log.info('Agent succeeded', { durationMs: result.durationMs });
           if (this.tracker.setIssueState) {
-            const merge = this.workspace.tryMergeIntoBase(issue.identifier);
-            if (merge.result === 'merged') {
-              log.info('Auto-merged into base branch');
-            } else if (merge.result === 'conflict') {
-              log.warn('Auto-merge conflict — branch preserved for manual resolution', {
-                reason: merge.reason,
-              });
-            } else {
-              log.info('Auto-merge skipped — branch preserved', { reason: merge.reason });
-            }
-            // Cap reason so a chatty git error can't bloat the DB row.
-            const mergeReason = merge.reason ? merge.reason.slice(0, 500) : null;
-            this.store.finishRun(
-              runId,
-              'succeeded',
-              0,
-              undefined,
-              hookOutput,
-              merge.result,
-              mergeReason,
-            );
-
-            // Mark done, then delete the task file (the autonomous flow doesn't
-            // need to keep finished prompts around — the merged commits and the
-            // run history in SQLite are the durable record).
-            await this.tracker.setIssueState(issue.id, ISSUE_STATES.DONE).catch((e) => {
-              log.warn('Failed to mark issue done', { error: String(e) });
-            });
-            if (this.tracker.deleteIssue) {
-              await this.tracker.deleteIssue(issue.id).catch((e) => {
-                log.warn('Failed to delete done task file', { error: String(e) });
-              });
-            }
-            await this.workspace.removeWorkspace(issue.identifier).catch((e) => {
-              log.warn('Failed to remove worktree after success', { error: String(e) });
-            });
-            // Delete the merged branch only after the worktree is gone, since git
-            // refuses to delete a branch that's checked out anywhere.
-            if (merge.result === 'merged') {
-              this.workspace.deleteBranch(issue.identifier);
-            }
+            await this.finalizeSuccess(issue, runId, hookOutput, log);
           } else {
             // No way to advance state — fall back to continuation pattern.
             this.store.finishRun(runId, 'succeeded', 0, undefined, hookOutput);
             this.retryEngine.scheduleContinuation(issue.id, issue.identifier);
           }
+          break;
         }
-      } else {
-        // Either the agent exited non-zero OR the after_run verification hook
-        // rejected its work. Either way, treat it as a failed attempt.
-        const hookFailed = !hookResult.ok;
-        // Use the TAIL of the hook output (not the head) for the error message.
-        // Build tools print progress first and errors last; the head shows
-        // "✓ success" while the actual error is past the 500-char cutoff.
-        const errMsg = hookFailed
-          ? `after_run failed: ${hookResult.output.slice(-500)}`
-          : result.stderr.slice(-500) || `exit code ${result.exitCode}`;
-        this.store.finishRun(runId, 'failed', result.exitCode, errMsg, hookOutput);
-        if (hookFailed && result.exitCode === 0) {
-          log.warn('Agent exited 0 but after_run hook rejected the work', {
-            durationMs: result.durationMs,
-          });
-        } else {
-          log.warn('Agent failed', {
-            exitCode: result.exitCode,
-            durationMs: result.durationMs,
-          });
-        }
-
-        // Stuck-loop detection. Two triggers:
-        // 1. Last 3 failures have the identical error → agent can't self-correct
-        // 2. 5+ total failures → agent is thrashing between different errors
-        // Either way, give up to stop burning API credits.
-        const SAME_ERROR_THRESHOLD = 3;
-        const TOTAL_FAILURE_CAP = 5;
-        const normalizeError = (e: string): string =>
-          e
-            .replace(/\d{2}:\d{2}:\d{2}/g, 'HH:MM:SS')
-            .replace(/\d{4}-\d{2}-\d{2}/g, 'YYYY-MM-DD')
-            .replace(/\.cacophony\/worktrees\/[^/\s]+/g, '.cacophony/worktrees/<id>')
-            .replace(/\d+ms/g, 'Nms');
-        const recentErrors = this.store.getRecentErrors(issue.id, TOTAL_FAILURE_CAP);
-        const normalized = recentErrors.map(normalizeError);
-        const sameErrorLoop =
-          normalized.length >= SAME_ERROR_THRESHOLD &&
-          normalized.slice(0, SAME_ERROR_THRESHOLD).every((e) => e === normalized[0]);
-        const tooManyFailures = recentErrors.length >= TOTAL_FAILURE_CAP;
-        if (sameErrorLoop || tooManyFailures) {
-          const reason = sameErrorLoop
-            ? `${SAME_ERROR_THRESHOLD} identical failures`
-            : `${recentErrors.length} total failures (thrashing)`;
-          log.error(
-            `Giving up on ${issue.identifier} after ${reason}. ` +
-              `The agent cannot resolve this. Create a targeted fix task with specific instructions.`,
-          );
-          this.claimed.delete(issue.id);
-          this.retryEngine.cancel(issue.id);
-          // Move to a terminal state so the next poll doesn't re-dispatch it.
-          // 'wontfix' is in the default terminalStates so fetchCandidates
-          // will skip it. The user can change it back to 'todo' from the
-          // dashboard if they want to retry with a different approach.
-          if (this.tracker.setIssueState) {
-            await this.tracker.setIssueState(issue.id, ISSUE_STATES.WONTFIX).catch((e) => {
-              log.warn('Failed to mark stuck task as wontfix', { error: String(e) });
+        case 'failed': {
+          this.store.finishRun(runId, 'failed', result.exitCode, outcome.errMsg, hookOutput);
+          if (outcome.hookFailed && result.exitCode === 0) {
+            log.warn('Agent exited 0 but after_run hook rejected the work', {
+              durationMs: result.durationMs,
+            });
+          } else {
+            log.warn('Agent failed', {
+              exitCode: result.exitCode,
+              durationMs: result.durationMs,
             });
           }
-        } else {
-          this.retryEngine.scheduleFailureRetry(issue.id, issue.identifier, attempt + 1, errMsg);
+          if (outcome.stuckReason) {
+            log.error(
+              `Giving up on ${issue.identifier} after ${outcome.stuckReason}. ` +
+                `The agent cannot resolve this. Create a targeted fix task with specific instructions.`,
+            );
+            this.claimed.delete(issue.id);
+            this.retryEngine.cancel(issue.id);
+            // 'wontfix' is in default terminalStates so fetchCandidates skips it.
+            // User can reopen it from the dashboard to try a different approach.
+            if (this.tracker.setIssueState) {
+              await this.tracker.setIssueState(issue.id, ISSUE_STATES.WONTFIX).catch((e) => {
+                log.warn('Failed to mark stuck task as wontfix', { error: String(e) });
+              });
+            }
+          } else {
+            this.retryEngine.scheduleFailureRetry(
+              issue.id,
+              issue.identifier,
+              attempt + 1,
+              outcome.errMsg,
+            );
+          }
+          break;
         }
       }
     } catch (e) {
