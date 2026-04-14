@@ -1,4 +1,4 @@
-import type { FilesTracker } from './trackers/files.js';
+import type { LocalTaskStore } from './types.js';
 
 /**
  * Turn a free-form user prompt into a short, filesystem/git-safe identifier.
@@ -29,11 +29,11 @@ export function slugifyPrompt(prompt: string): string {
  * Given a base slug, return either the base itself (if not taken) or the
  * base with a numeric suffix (`-2`, `-3`, ...) until a free name is found.
  */
-export function uniqueIdentifier(tracker: FilesTracker, base: string): string {
-  if (!tracker.getTask(base)) return base;
+export function uniqueIdentifier(store: LocalTaskStore, base: string): string {
+  if (!store.getTask(base)) return base;
   for (let i = 2; i < 1000; i++) {
     const candidate = `${base}-${i}`;
-    if (!tracker.getTask(candidate)) return candidate;
+    if (!store.getTask(candidate)) return candidate;
   }
   return `${base}-${Date.now()}`;
 }

@@ -7,7 +7,7 @@ import type {
   TrackerAdapter,
   RunRecord,
 } from './types.js';
-import { ISSUE_STATES } from './types.js';
+import { ISSUE_STATES, isLocalTaskStore } from './types.js';
 import type { ConfigManager } from './config.js';
 import type { StateStore } from './state.js';
 import { WorkspaceManager } from './workspace.js';
@@ -209,6 +209,7 @@ export class Orchestrator {
     retrying: RetryEntry[];
     claimed: string[];
     trackerKind: string;
+    canManageTasks: boolean;
     activeStates: string[];
     terminalStates: string[];
     briefEnabled: boolean;
@@ -228,6 +229,7 @@ export class Orchestrator {
       retrying: this.retryEngine?.getActiveRetries() ?? [],
       claimed: Array.from(this.claimed),
       trackerKind: this.tracker?.kind ?? '',
+      canManageTasks: isLocalTaskStore(this.tracker),
       activeStates: config.tracker.activeStates ?? [],
       terminalStates: config.tracker.terminalStates ?? [],
       briefEnabled: config.brief.enabled,
@@ -444,7 +446,7 @@ export class Orchestrator {
       // build output so the agent starts with the exact failure context —
       // the single biggest factor in retry success rates.
       const wf = this.configManager.getCurrent();
-      const tasksDir = this.tracker.getTasksDir?.();
+      const tasksDir = isLocalTaskStore(this.tracker) ? this.tracker.getTasksDir() : undefined;
 
       let lastError: string | null = null;
       let lastHookOutput: string | null = null;

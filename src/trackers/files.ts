@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { TrackerAdapter, TrackerConfig, Issue } from '../types.js';
+import type { TrackerAdapter, LocalTaskStore, TrackerConfig, Issue } from '../types.js';
 import { ISSUE_STATES } from '../types.js';
 
 interface TaskFrontMatter {
@@ -63,7 +63,7 @@ function parseTaskFile(filePath: string, identifier: string): Issue | null {
   };
 }
 
-export class FilesTracker implements TrackerAdapter {
+export class FilesTracker implements TrackerAdapter, LocalTaskStore {
   kind = 'files';
   private dir: string;
   private activeStates: string[];

@@ -8,8 +8,8 @@ import { ConfigManager, updateConfigHooks, updateConfigFields } from './config.j
 import { StateStore } from './state.js';
 import { Orchestrator } from './orchestrator.js';
 import { Logger } from './logger.js';
-import type { FilesTracker } from './trackers/files.js';
-import { ISSUE_STATES } from './types.js';
+import type { LocalTaskStore } from './types.js';
+import { ISSUE_STATES, isLocalTaskStore } from './types.js';
 import { slugifyPrompt, uniqueIdentifier } from './slug.js';
 import { runBrief } from './brief.js';
 import { lookupSkillPack, installSkillPack, isSkillInstalled } from './skills.js';
@@ -418,12 +418,9 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function getFilesTracker(orchestrator: Orchestrator): FilesTracker | null {
+function getLocalTaskStore(orchestrator: Orchestrator): LocalTaskStore | null {
   const tracker = orchestrator.getTracker();
-  if (tracker?.kind === 'files') {
-    return tracker as FilesTracker;
-  }
-  return null;
+  return isLocalTaskStore(tracker) ? tracker : null;
 }
 
 function startHttpServer(state: ServerState, port: number): void {
@@ -526,6 +523,7 @@ function startHttpServer(state: ServerState, port: number): void {
             retrying: [],
             claimed: [],
             trackerKind: '',
+            canManageTasks: false,
             activeStates: [],
             terminalStates: [],
             briefEnabled: false,
@@ -717,22 +715,21 @@ function startHttpServer(state: ServerState, port: number): void {
         return;
       }
 
-      // --- Tasks API (files tracker only) ---
-      const filesTracker = getFilesTracker(orchestrator);
+      // --- Tasks API (requires a tracker with LocalTaskStore capability) ---
+      const localStore = getLocalTaskStore(orchestrator);
 
       if (req.method === 'GET' && url.pathname === '/api/v1/tasks') {
-        if (!filesTracker) {
-          json(200, []); // Non-files trackers: no local task management
+        if (!localStore) {
+          json(200, []); // Remote trackers: no local task management
           return;
         }
-        const tasks = filesTracker.getAllTasks();
-        json(200, tasks);
+        json(200, localStore.getAllTasks());
         return;
       }
 
       if (req.method === 'POST' && url.pathname === '/api/v1/tasks') {
-        if (!filesTracker) {
-          json(400, { error: 'Task creation only supported with files tracker' });
+        if (!localStore) {
+          json(400, { error: 'Task creation requires a tracker with local task storage' });
           return;
         }
         const body = JSON.parse(await readBody(req));
@@ -741,8 +738,8 @@ function startHttpServer(state: ServerState, port: number): void {
           json(400, { error: 'prompt is required' });
           return;
         }
-        const identifier = uniqueIdentifier(filesTracker, slugifyPrompt(prompt));
-        filesTracker.createTask(identifier, ISSUE_STATES.TODO, priority ?? null, prompt.trim());
+        const identifier = uniqueIdentifier(localStore, slugifyPrompt(prompt));
+        localStore.createTask(identifier, ISSUE_STATES.TODO, priority ?? null, prompt.trim());
         logger.info(`Task created via API: ${identifier}`);
         // Nudge the orchestrator to dispatch immediately rather than waiting
         // for the next poll cycle.
@@ -752,14 +749,14 @@ function startHttpServer(state: ServerState, port: number): void {
       }
 
       if (req.method === 'PUT' && url.pathname.match(/^\/api\/v1\/tasks\/[^/]+\/state$/)) {
-        if (!filesTracker) {
-          json(400, { error: 'State update only supported with files tracker' });
+        if (!localStore) {
+          json(400, { error: 'State update requires a tracker with local task storage' });
           return;
         }
         const parts = url.pathname.split('/');
         const identifier = decodeURIComponent(parts[parts.length - 2]);
         const body = JSON.parse(await readBody(req));
-        const updated = filesTracker.updateTaskState(identifier, body.state);
+        const updated = localStore.updateTaskState(identifier, body.state);
         json(updated ? 200 : 404, { updated, identifier });
         return;
       }
@@ -769,7 +766,7 @@ function startHttpServer(state: ServerState, port: number): void {
         // Best-effort "remove all trace of this task": the .md file, all run
         // history, the issues cache row, any pending retry, and the in-memory
         // retry timer.
-        const fileDeleted = filesTracker ? filesTracker.deleteTask(identifier) : false;
+        const fileDeleted = localStore ? localStore.deleteTask(identifier) : false;
         const purged = orchestrator.purgeByIdentifier(identifier);
         const anything = fileDeleted || purged.runs > 0 || purged.issues > 0 || purged.retries > 0;
         json(anything ? 200 : 404, { fileDeleted, ...purged, identifier });

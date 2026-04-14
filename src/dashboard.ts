@@ -569,7 +569,7 @@ export function dashboardHtml(): string {
   </div>
 
   <!-- Create task (files tracker only) -->
-  <div class="creator" x-show="trackerKind === 'files'">
+  <div class="creator" x-show="canManageTasks">
     <form @submit.prevent="runTask()">
       <textarea x-model="newTask.prompt" placeholder="Describe what needs to be done..." required rows="3" :disabled="runBusy"></textarea>
       <div class="creator-row">
@@ -709,7 +709,7 @@ export function dashboardHtml(): string {
 
     <div class="empty" x-show="filteredTasks.length === 0">
       <strong x-text="filter === 'active' ? 'No active tasks' : filter === 'done' ? 'No completed tasks' : 'No tasks yet'"></strong>
-      <span x-show="trackerKind === 'files' && filter !== 'done'">Create one above to get started.</span>
+      <span x-show="canManageTasks && filter !== 'done'">Create one above to get started.</span>
     </div>
   </div>
 
@@ -764,7 +764,7 @@ export function dashboardHtml(): string {
           </div>
         </div>
       </div>
-      <div class="modal-foot" x-show="trackerKind === 'files' && selected">
+      <div class="modal-foot" x-show="canManageTasks && selected">
         <template x-if="selected && isRunning(selected)">
           <button class="btn danger" @click="stopRun(selected.identifier); selected = null">Stop</button>
         </template>
@@ -880,6 +880,7 @@ function app() {
     running: [],
     retrying: [],
     trackerKind: '',
+    canManageTasks: false,
     activeStates: ['todo','in-progress'],
     terminalStates: ['done','cancelled','wontfix'],
     briefEnabled: false,
@@ -977,6 +978,7 @@ function app() {
         ]);
         this.status = status;
         this.trackerKind = status.trackerKind || '';
+        this.canManageTasks = !!status.canManageTasks;
         if (status.activeStates?.length) this.activeStates = status.activeStates;
         if (status.terminalStates?.length) this.terminalStates = status.terminalStates;
         this.briefEnabled = !!status.briefEnabled;

@@ -42,6 +42,14 @@ export interface BlockerRef {
 
 // === Tracker Plugin Interface ===
 
+/**
+ * The minimum contract every tracker implements: discover active tasks,
+ * refresh their states, and (optionally) advance/delete them. Anything more
+ * specific — task file CRUD, local tasks directory, etc. — belongs on
+ * `LocalTaskStore`, a capability interface that only some trackers (today
+ * just FilesTracker) also implement. Callers that need file-level features
+ * should use `isLocalTaskStore(tracker)` to narrow.
+ */
 export interface TrackerAdapter {
   kind: string;
   init?(): Promise<void>;
@@ -50,8 +58,36 @@ export interface TrackerAdapter {
   fetchTerminalIssues?(): Promise<Issue[]>;
   setIssueState?(issueId: string, state: string): Promise<void>;
   deleteIssue?(issueId: string): Promise<void>;
+}
+
+/**
+ * Capability for trackers that own a local task store (task files on disk).
+ * Not every tracker has this — remote trackers like Linear or GitHub fetch
+ * tasks from an API and can't offer local CRUD or a tasks directory.
+ */
+export interface LocalTaskStore {
+  getAllTasks(): Issue[];
+  getTask(identifier: string): Issue | null;
+  createTask(
+    identifier: string,
+    state: string,
+    priority: number | null,
+    content: string,
+    parent?: string | null,
+  ): void;
+  updateTaskState(identifier: string, newState: string): boolean;
+  deleteTask(identifier: string): boolean;
   /** Absolute path where new tasks can be written (used for self-decomposition prompts). */
-  getTasksDir?(): string;
+  getTasksDir(): string;
+}
+
+export function isLocalTaskStore(t: unknown): t is LocalTaskStore {
+  return (
+    !!t &&
+    typeof t === 'object' &&
+    typeof (t as LocalTaskStore).createTask === 'function' &&
+    typeof (t as LocalTaskStore).getTasksDir === 'function'
+  );
 }
 
 // === Workflow / Config ===
