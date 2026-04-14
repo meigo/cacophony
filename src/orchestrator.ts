@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { Liquid } from 'liquidjs';
 import type {
   Issue,
   RunEntry,
@@ -16,8 +15,7 @@ import { AgentRunner } from './runner.js';
 import { RetryEngine } from './retry.js';
 import { createTracker } from './trackers/interface.js';
 import type { Logger } from './logger.js';
-
-const liquid = new Liquid({ strictVariables: false, strictFilters: true });
+import { renderPrompt } from './template.js';
 
 /**
  * Returns true if `issue` is still blocked by at least one pending dependency.
@@ -381,7 +379,7 @@ export class Orchestrator {
         }
       }
 
-      const promptContent = liquid.parseAndRenderSync(wf.promptTemplate, {
+      const promptContent = renderPrompt(wf.promptTemplate, {
         issue: {
           ...issue,
           createdAt: issue.createdAt.toISOString(),
@@ -393,7 +391,7 @@ export class Orchestrator {
         config: wf.config,
         project_root: this.workspace.getProjectRoot(),
         tasks_dir: tasksDir,
-      }) as string;
+      });
 
       // Create DB record (preserve the original task description AND the
       // parent identifier so the dashboard's historical view can still place

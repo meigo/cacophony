@@ -1,11 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execSync } from 'node:child_process';
-import { Liquid } from 'liquidjs';
 import type { AgentConfig, AgentResult } from './types.js';
 import type { Logger } from './logger.js';
-
-const liquid = new Liquid({ strictVariables: false, strictFilters: true });
+import { renderCommand } from './template.js';
 
 export class AgentRunner {
   private config: AgentConfig;
@@ -35,8 +33,7 @@ export class AgentRunner {
     const promptFile = path.join(workspacePath, '.cacophony-prompt.md');
     fs.writeFileSync(promptFile, promptContent, 'utf-8');
 
-    // Render command template
-    const renderedCommand = liquid.parseAndRenderSync(this.config.command, {
+    const renderedCommand = renderCommand(this.config.command, {
       prompt_file: promptFile,
       workspace: workspacePath,
       identifier: issueIdentifier,

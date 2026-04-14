@@ -1,12 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { Liquid } from 'liquidjs';
 import type { AgentConfig } from './types.js';
 import type { Logger } from './logger.js';
 import { slugifyPrompt } from './slug.js';
-
-const liquid = new Liquid({ strictVariables: false, strictFilters: true });
+import { renderBrief, renderCommand } from './template.js';
 
 export type BriefMessage = { role: 'user' | 'assistant'; content: string };
 
@@ -91,12 +89,12 @@ function buildPromptFile(transcript: BriefMessage[], round: number, maxRounds: n
     .slice(1)
     .map((m) => `${m.role}: ${m.content}`)
     .join('\n\n');
-  return liquid.parseAndRenderSync(BRIEF_TEMPLATE, {
+  return renderBrief(BRIEF_TEMPLATE, {
     user_prompt: firstUser,
     prior_turns: priorTurns,
     round,
     max_rounds: maxRounds,
-  }) as string;
+  });
 }
 
 /**
@@ -250,12 +248,12 @@ export async function runBrief(opts: RunBriefOpts): Promise<BriefResult> {
   const promptContent = buildPromptFile(transcript, round, maxRounds);
   fs.writeFileSync(promptFile, promptContent, 'utf-8');
 
-  const renderedCommand = liquid.parseAndRenderSync(agent.command, {
+  const renderedCommand = renderCommand(agent.command, {
     prompt_file: promptFile,
     workspace: briefDir,
     identifier: 'brief',
     attempt: 0,
-  }) as string;
+  });
 
   logger.info('Running brief', { round, maxRounds });
 
