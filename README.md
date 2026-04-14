@@ -524,21 +524,31 @@ npm run check            # Full pipeline: lint + format + test + build
 src/
   index.ts              CLI entry point (init/start/status/stop), HTTP server + API
   orchestrator.ts       Poll loop, dispatch, reconciliation, blocker enforcement
+  outcome.ts            Pure classifier for agent-run outcomes (testable decision tree)
   config.ts             Config file parser, validator, hot-reload watcher
   state.ts              SQLite store (runs, retries, issues, metrics)
-  workspace.ts          Git worktree lifecycle, hooks, safety checks
+  workspace.ts          Git worktree lifecycle, hooks, safety checks, branch naming
   runner.ts             Agent subprocess management
   retry.ts              Exponential backoff, persistence, timer restoration
   brief.ts              Pre-task LLM intake (clarify or ready, framework detection)
+  template.ts           Shared Liquid instance, typed prompt/command/brief contexts
   skills.ts             Community skill pack registry, clone + install
   slug.ts               Prompt-to-identifier slug generation
   logger.ts             Structured JSON logging, terminal status
-  dashboard.ts          Inline Alpine.js web dashboard (dark/light, brief modal, etc.)
-  types.ts              Shared type definitions
+  dashboard.ts          Reads the static dashboard assets and splices them together
+  dashboard/
+    index.html          Dashboard markup (Alpine.js directives)
+    styles.css          Dashboard styles
+    app.js              Alpine app() function and state
+  types.ts              Shared type definitions + ISSUE_STATES constants
   trackers/
     interface.ts        TrackerAdapter interface, factory
-    files.ts            Local markdown files (with blocked_by support)
+    files.ts            Local markdown files (with blocked_by support, LocalTaskStore capability)
 ```
+
+**Tracker capabilities.** `TrackerAdapter` is the minimum contract every tracker implements (discover candidates, refresh states, optionally advance or delete). Task-file CRUD and a local tasks directory live on a separate `LocalTaskStore` capability interface that only `FilesTracker` implements today — remote trackers (Linear, GitHub, …) can't reasonably provide those, so forcing them onto every adapter would rot the first time a second tracker existed. The dashboard gates file-specific UI (task creation, delete, state transitions) on the capability, not on `kind === 'files'`.
+
+**Orchestrator split.** `orchestrator.ts` handles effects (subprocess, git, DB, tracker calls); the decision tree — timeout vs no-changes vs success vs failed-retry vs stuck-loop — lives in `outcome.ts` as a pure function with a unit-tested discriminated union. Adding a new retry policy or exit condition means extending one small file, not surgery on a 300-line method.
 
 ### Runtime dependencies
 
