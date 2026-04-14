@@ -32,6 +32,18 @@ export function isStillBlocked(issue: Issue, terminalStates: string[]): boolean 
   });
 }
 
+/** Canonical reasons passed to `store.finishRun` when a run is canceled. */
+export const CANCEL_REASONS = {
+  SHUTDOWN: 'shutdown',
+  TASK_DELETED: 'task deleted',
+  MANUAL_CANCEL: 'manual cancel',
+  STUCK_LOOP: 'stuck loop',
+} as const;
+type CancelReasonLiteral = (typeof CANCEL_REASONS)[keyof typeof CANCEL_REASONS];
+// Reconcile paths use reason strings like `issue moved to ${state}` that can't
+// fit a closed union; accept the constants as canonical plus any raw string.
+type CancelReason = CancelReasonLiteral | string;
+
 export class Orchestrator {
   private configManager: ConfigManager;
   private store: StateStore;
@@ -134,10 +146,11 @@ export class Orchestrator {
 
     this.logger.info('Shutting down...');
 
-    // Abort all running agents
+    // Abort all running agents. Not using cancelRunningEntry here because we
+    // bulk-clear both maps afterwards and shut down the retry engine wholesale.
     for (const [_issueId, entry] of this.running) {
       entry.abortController.abort();
-      this.store.finishRun(entry.runId, 'canceled', null, 'shutdown');
+      this.store.finishRun(entry.runId, 'canceled', null, CANCEL_REASONS.SHUTDOWN);
       this.logger.info(`Canceled agent for ${entry.issueIdentifier}`);
     }
     this.running.clear();
@@ -173,14 +186,11 @@ export class Orchestrator {
     // running map we look up by identifier directly.
     for (const [issueId, entry] of this.running) {
       if (entry.issueIdentifier === identifier) {
-        entry.abortController.abort();
-        this.store.finishRun(entry.runId, 'canceled', null, 'task deleted');
-        this.running.delete(issueId);
-        this.claimed.delete(issueId);
-        this.retryEngine?.cancel(issueId);
+        this.cancelRunningEntry(issueId, entry, CANCEL_REASONS.TASK_DELETED);
         break;
       }
     }
+    // Files tracker uses identifier as id; retryEngine may have keyed either.
     this.retryEngine?.cancel(identifier);
     return this.store.purgeByIdentifier(identifier);
   }
@@ -227,11 +237,7 @@ export class Orchestrator {
   cancelIssue(issueIdentifier: string): boolean {
     for (const [issueId, entry] of this.running) {
       if (entry.issueIdentifier === issueIdentifier) {
-        entry.abortController.abort();
-        this.store.finishRun(entry.runId, 'canceled', null, 'manual cancel');
-        this.running.delete(issueId);
-        this.claimed.delete(issueId);
-        this.retryEngine.cancel(issueId);
+        this.cancelRunningEntry(issueId, entry, CANCEL_REASONS.MANUAL_CANCEL);
         this.logger.info(`Manually canceled ${issueIdentifier}`);
         return true;
       }
@@ -250,6 +256,20 @@ export class Orchestrator {
   }
 
   // --- Private ---
+
+  /**
+   * Tear down a running entry: abort the subprocess, finalize the run row,
+   * drop in-memory claim/bookkeeping, and cancel any scheduled retry.
+   * Used by cancel paths that stop work without replacement. Callers that
+   * need to retry (e.g. stall detection) skip this and do their own dance.
+   */
+  private cancelRunningEntry(issueId: string, entry: RunEntry, reason: CancelReason): void {
+    entry.abortController.abort();
+    this.store.finishRun(entry.runId, 'canceled', null, reason);
+    this.running.delete(issueId);
+    this.claimed.delete(issueId);
+    this.retryEngine?.cancel(issueId);
+  }
 
   private scheduleTick(delayMs: number): void {
     if (this.shuttingDown) return;
@@ -755,22 +775,14 @@ export class Orchestrator {
         if (terminalStates.includes(state)) {
           // Terminal — kill and clean workspace
           this.logger.info(`Issue ${entry.issueIdentifier} is now terminal (${state}), stopping`);
-          entry.abortController.abort();
-          this.running.delete(issueId);
-          this.claimed.delete(issueId);
-          this.retryEngine.cancel(issueId);
-          this.store.finishRun(entry.runId, 'canceled', null, `issue moved to ${state}`);
+          this.cancelRunningEntry(issueId, entry, `issue moved to ${state}`);
           await this.workspace.removeWorkspace(entry.issueIdentifier);
         } else if (!activeStates.includes(state)) {
           // Non-active, non-terminal — kill without cleanup
           this.logger.info(
             `Issue ${entry.issueIdentifier} moved to non-active state (${state}), stopping`,
           );
-          entry.abortController.abort();
-          this.running.delete(issueId);
-          this.claimed.delete(issueId);
-          this.retryEngine.cancel(issueId);
-          this.store.finishRun(entry.runId, 'canceled', null, `issue moved to ${state}`);
+          this.cancelRunningEntry(issueId, entry, `issue moved to ${state}`);
         }
         // Still active — keep running
       }
