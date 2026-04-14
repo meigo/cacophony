@@ -4,7 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import type { HooksConfig, MergeStatus } from './types.js';
 import type { Logger } from './logger.js';
 
-function sanitizeIdentifier(identifier: string): string {
+export function sanitizeIdentifier(identifier: string): string {
   // Replace invalid chars, then replace leading dots (git branch names can't start with .)
   // and collapse sequences of dots (.. is invalid in git refs).
   return identifier
@@ -12,6 +12,11 @@ function sanitizeIdentifier(identifier: string): string {
     .replace(/\.{2,}/g, '_')
     .replace(/^\.+/, '_')
     .replace(/\.+$/, '_');
+}
+
+/** Canonical branch name cacophony creates for a task identifier. */
+export function branchNameFor(identifier: string): string {
+  return `cacophony/${sanitizeIdentifier(identifier)}`;
 }
 
 /**
@@ -201,6 +206,11 @@ export class WorkspaceManager {
     return this.baseBranch;
   }
 
+  /** Branch name cacophony uses for a task identifier (e.g. `cacophony/<sanitized>`). */
+  getBranchName(issueIdentifier: string): string {
+    return branchNameFor(issueIdentifier);
+  }
+
   updateHooks(hooks: HooksConfig): void {
     this.hooks = hooks;
   }
@@ -213,7 +223,7 @@ export class WorkspaceManager {
   async ensureWorkspace(issueIdentifier: string): Promise<{ path: string; createdNow: boolean }> {
     const key = sanitizeIdentifier(issueIdentifier);
     const wsPath = path.join(this.worktreeRoot, key);
-    const branchName = `cacophony/${key}`;
+    const branchName = branchNameFor(issueIdentifier);
 
     // Safety: ensure worktree is under worktreeRoot
     const resolved = path.resolve(wsPath);
@@ -365,8 +375,7 @@ export class WorkspaceManager {
    * worktree). Used after a successful auto-merge.
    */
   deleteBranch(issueIdentifier: string): void {
-    const key = sanitizeIdentifier(issueIdentifier);
-    const branchName = `cacophony/${key}`;
+    const branchName = branchNameFor(issueIdentifier);
     try {
       execFileSync('git', ['branch', '-D', branchName], {
         cwd: this.projectRoot,
@@ -393,9 +402,8 @@ export class WorkspaceManager {
     result: MergeStatus;
     reason?: string;
   } {
-    const key = sanitizeIdentifier(issueIdentifier);
-    const branchName = `cacophony/${key}`;
-    const wsPath = path.join(this.worktreeRoot, key);
+    const branchName = branchNameFor(issueIdentifier);
+    const wsPath = path.join(this.worktreeRoot, sanitizeIdentifier(issueIdentifier));
 
     // Make sure any forgotten work is committed before merging
     this.commitDirtyWorktree(wsPath);

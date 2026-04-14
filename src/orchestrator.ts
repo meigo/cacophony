@@ -154,6 +154,10 @@ export class Orchestrator {
     return this.tracker;
   }
 
+  getWorkspace(): WorkspaceManager {
+    return this.workspace;
+  }
+
   getRecentRuns(limit: number = 20): RunRecord[] {
     return this.store.getRecentRuns(limit);
   }

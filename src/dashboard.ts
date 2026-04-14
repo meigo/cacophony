@@ -753,7 +753,7 @@ export function dashboardHtml(): string {
                 <div class="merge-note" x-show="hasMergeIssue(r)">
                   <strong x-text="r.mergeStatus === 'conflict' ? 'Merge conflict — branch preserved' : 'Auto-merge skipped — branch preserved'"></strong>
                   <span x-show="r.mergeReason" x-text="': ' + r.mergeReason"></span>
-                  <div style="margin-top:4px;color:var(--text-dim)">Land manually: <code x-text="'git merge --no-ff cacophony/' + r.issueIdentifier"></code></div>
+                  <div style="margin-top:4px;color:var(--text-dim)">Land manually: <code x-text="'git merge --no-ff ' + r.branchName"></code></div>
                 </div>
                 <details x-show="r.hookOutput" class="run-hook-output">
                   <summary>Build output</summary>

@@ -549,7 +549,12 @@ function startHttpServer(state: ServerState, port: number): void {
       // --- Runs API ---
       if (req.method === 'GET' && url.pathname === '/api/v1/runs') {
         const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
-        json(200, orchestrator.getRecentRuns(Math.min(limit, 100)));
+        const ws = orchestrator.getWorkspace();
+        const enriched = orchestrator.getRecentRuns(Math.min(limit, 100)).map((r) => ({
+          ...r,
+          branchName: ws.getBranchName(r.issueIdentifier),
+        }));
+        json(200, enriched);
         return;
       }
 
@@ -776,16 +781,7 @@ function startHttpServer(state: ServerState, port: number): void {
       if (req.method === 'GET' && previewMatch) {
         const identifier = decodeURIComponent(previewMatch[1]);
         const filePath = previewMatch[2] || '/index.html';
-        const projectRoot = path.resolve(configManager.getCurrent().config.workspace.projectRoot);
-        const worktreeBase = path.join(projectRoot, '.cacophony', 'worktrees');
-
-        // Sanitize the identifier the same way workspace.ts does
-        const sanitized = identifier
-          .replace(/[^A-Za-z0-9._-]/g, '_')
-          .replace(/\.{2,}/g, '_')
-          .replace(/^\.+/, '_')
-          .replace(/\.+$/, '_');
-        const wsPath = path.join(worktreeBase, sanitized);
+        const wsPath = orchestrator.getWorkspace().getWorkspacePath(identifier);
 
         // Look for the file in common build output dirs, then worktree root
         const candidates = [
