@@ -64,6 +64,11 @@ A `post_merge` hook that runs in the main checkout after auto-merge succeeds. Us
 ### Per-task hook overrides
 Allow individual tasks to override the project-level `after_run` hook. A decomposition parent might want no verification, while a code task wants full build + test. Currently handled by the decomposition detection (worktree clean → skip hook), but explicit per-task overrides would give more control.
 
+## Brief flow
+
+### Skip clarification questions when config already answers them
+The briefing agent (`src/brief.ts:65-74`) always asks which linting tools to use on JS/TS projects when the user hasn't specified a preference in the request. It doesn't check whether an `after_run` lint hook is already configured, so users who picked Biome (or ESLint+Prettier) on a previous run get re-asked every time — obvious-feeling when the project base hasn't changed. Fix: pass the current `after_run` hook into the briefing prompt and instruct the agent to skip the linting question when one already exists, unless the user's request implies a tooling change. Same pattern could apply to other clarification questions that have a persisted answer. Note: `updateConfigHooks()` in `src/config.ts:255` replaces `after_run` wholesale, so choosing a different linter on a later run wipes the previous one — no risk of both tools ending up configured, but also no audit trail of the switch.
+
 ## Retry intelligence
 
 ### Thrashing pattern detection (implemented — cap at 5)

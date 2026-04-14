@@ -151,7 +151,7 @@ Shell scripts that run at worktree lifecycle points. All execute with the worktr
 
 | Field | Description |
 |---|---|
-| `after_create` | Runs once after a worktree is first created. Failure aborts creation. |
+| `after_create` | Runs once after a worktree is first created. Best-effort pre-warm (e.g. dep bootstrap) — failure is logged but the run continues, so empty/fresh projects don't get stuck on `npm install` before a `package.json` exists. For hard setup gates, use `before_run` or guard inside the script. |
 | `before_run` | Runs before each agent attempt. Failure aborts the attempt. |
 | `after_run` | Verification gate. Runs after each agent attempt. **If it exits non-zero, the attempt is rejected even when the agent exited 0** — no auto-merge, branch is preserved, task is retried. Typical use: `npm test`, `pytest`, `cargo test`, `go test`, lint/type checks. |
 | `before_remove` | Runs before worktree deletion. Failure is logged and ignored. |

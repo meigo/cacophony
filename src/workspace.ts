@@ -28,7 +28,6 @@ const SECRET_PATTERNS = [
   '*.pfx',
   'credentials.json',
   'service-account*.json',
-  'config.js',
   'secrets.*',
 ];
 
@@ -279,13 +278,16 @@ export class WorkspaceManager {
     // accidentally commit API keys, credentials, or private keys.
     ensureSecretGitignore(wsPath);
 
-    // Run after_create hook if configured
+    // Best-effort pre-warm (e.g. node_modules cache). Non-fatal: agents can
+    // bootstrap missing deps themselves, and fresh projects have nothing to
+    // install yet. Hard setup gates belong in before_run.
     if (this.hooks.afterCreate) {
       const result = await this.runHook('afterCreate', wsPath);
       if (!result.ok) {
-        // Cleanup failed worktree
-        await this.removeWorktree(wsPath);
-        throw new Error(`after_create hook failed: ${result.output}`);
+        this.logger.warn('Hook afterCreate failed (continuing)', {
+          path: wsPath,
+          output: result.output,
+        });
       }
     }
 

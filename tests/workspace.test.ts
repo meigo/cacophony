@@ -90,15 +90,15 @@ describe('WorkspaceManager', () => {
       expect(fs.existsSync(path.join(mgr.getWorkspacePath('GH-1'), '.hook-ran'))).toBe(false);
     });
 
-    it('cleans up workspace if after_create hook fails', async () => {
+    it('keeps workspace and continues when after_create hook fails', async () => {
       const hooks: HooksConfig = {
         afterCreate: 'exit 1',
         timeoutMs: 5000,
       };
       const mgr = new WorkspaceManager(dir, hooks, logger);
 
-      await expect(mgr.ensureWorkspace('GH-fail')).rejects.toThrow('after_create hook failed');
-      expect(fs.existsSync(mgr.getWorkspacePath('GH-fail'))).toBe(false);
+      const result = await mgr.ensureWorkspace('GH-fail');
+      expect(fs.existsSync(result.path)).toBe(true);
     });
 
     it('prevents path traversal', async () => {
