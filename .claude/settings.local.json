@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -i '1s/^\\\\xef\\\\xbb\\\\xbf//' ~/.bashrc)",
+      "Read(//c/Users/meigo/**)",
+      "Bash(xxd)"
+    ]
+  }
+}
